@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+/* Custom styles */
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* Hardware acceleration for Leaflet map - improves performance */
+.leaflet-container {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Hardware acceleration for markers */
+.custom-balloon-marker {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.custom-balloon-marker > div {
+  transform: translateZ(0);
+}
+
+/* Smooth rendering for map tiles */
+.leaflet-tile {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+/* Optimize popup rendering */
+.leaflet-popup {
+  will-change: transform, opacity;
+}
