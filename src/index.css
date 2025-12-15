@@ -16,6 +16,16 @@ body {
   backface-visibility: hidden;
 }
 
+/* Disable CSS transitions - let React handle smooth updates via interpolation */
+.leaflet-interactive {
+  transition: none !important;
+}
+
+/* Disable path transitions */
+.leaflet-interactive path {
+  transition: none !important;
+}
+
 /* Hardware acceleration for markers */
 .custom-balloon-marker {
   transform: translateZ(0);

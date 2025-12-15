@@ -11,21 +11,16 @@ async function fetchBalloonDataForHour(hour) {
     const hourStr = hour.toString().padStart(2, '0');
     const url = `${CONFIG.WINDBORNE_API_BASE}/${hourStr}.json`;
     
-    console.log(`Fetching: ${url}`);
     const response = await fetch(url);
     
     if (!response.ok) {
-      console.warn(`Failed to fetch hour ${hourStr}: ${response.status}`);
       return null;
     }
     
     const data = await response.json();
-    console.log(`Raw data for hour ${hourStr}:`, data);
-    console.log(`Data type:`, typeof data, `Is array:`, Array.isArray(data), `Length:`, data?.length);
     
     return validateBalloonData(data, hour);
-  } catch (error) {
-    console.warn(`Error fetching hour ${hour}:`, error.message);
+  } catch {
     return null;
   }
 }
@@ -79,36 +74,18 @@ function validateBalloonData(data, hour) {
 }
 
 /**
- * Fetch all 24 hours of balloon data
+ * Fetch all 24 hours of balloon data starting from 24 hours ago
  * @returns {Promise<Array>} Array of balloon data for each hour
  */
 export async function fetchAllBalloonData() {
-  console.log('🎈 Fetching balloon data for 24 hours...');
-  console.log('📡 Making API calls to WindBorne for hours 00-23...');
-  
   const promises = [];
-  for (let hour = 0; hour < CONFIG.HOURS_TO_FETCH; hour++) {
-    const hourStr = hour.toString().padStart(2, '0');
-    console.log(`  → Calling API for hour ${hourStr}.json`);
+  for (let hour = 24; hour >= 0; hour--) {
     promises.push(fetchBalloonDataForHour(hour));
   }
-  
-  console.log(`⏳ Waiting for all ${CONFIG.HOURS_TO_FETCH} API calls to complete...`);
+
   const results = await Promise.all(promises);
-  
   const validResults = results.filter(Boolean);
-  
-  console.log(`✅ Successfully fetched ${validResults.length}/${CONFIG.HOURS_TO_FETCH} hours of data`);
-  console.log('📊 API Results Summary:');
-  results.forEach((result, index) => {
-    const hourStr = index.toString().padStart(2, '0');
-    if (result) {
-      console.log(`  ✓ Hour ${hourStr}: ${result.balloons.length} balloons found`);
-    } else {
-      console.log(`  ✗ Hour ${hourStr}: No data or error`);
-    }
-  });
-  
+
   return validResults;
 }
 
@@ -135,19 +112,16 @@ export async function fetchWeatherData(lat, lon, altitude = 16000) {
     });
 
     const url = `${CONFIG.WEATHER_API_BASE}?${params}`;
-    console.log(`🌤️ Fetching weather for ${lat.toFixed(2)}°, ${lon.toFixed(2)}° at ${altitude}m (${pressureLevel})`);
 
     const response = await fetch(url);
 
     if (!response.ok) {
-      console.warn(`Weather API error: ${response.status}`);
       return null;
     }
 
     const data = await response.json();
 
     if (!data.hourly) {
-      console.warn('No hourly data available');
       return null;
     }
 
@@ -167,8 +141,7 @@ export async function fetchWeatherData(lat, lon, altitude = 16000) {
       pressureLevel: pressureLevel,
       altitude: altitude
     };
-  } catch (error) {
-    console.warn(`Failed to fetch weather for ${lat},${lon} at ${altitude}m:`, error.message);
+  } catch {
     return null;
   }
 }
@@ -199,6 +172,7 @@ export function processBalloonData(allHoursData) {
       
       // Store position for this hour
       const posData = {
+        id: balloonId,
         lat: balloon.lat,
         lon: balloon.lon,
         alt: balloon.alt,
@@ -224,9 +198,6 @@ export function processBalloonData(allHoursData) {
       trajectory: sortedPositions.map(p => [p.lat, p.lon])
     };
   });
-  
-  console.log(`📊 Processed ${processedBalloons.length} unique balloons`);
-  console.log(`📍 Sample balloon tracking:`, processedBalloons[0]);
   
   return processedBalloons;
 }

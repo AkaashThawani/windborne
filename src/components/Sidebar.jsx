@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { calculateSegmentSpeed, getPressureLevel } from '../utils/trajectoryEngine';
+import { calculateSegmentSpeed, calculateDriftVector } from '../utils/trajectoryEngine';
+import { getWeatherDataForTrack, getCachedWeatherDataWithTime } from '../services/weatherService';
 import {
   MapPinIcon,
   CloudIcon,
@@ -14,16 +15,23 @@ import {
 const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
   const [weatherData, setWeatherData] = useState(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
+  const [hoveredHour, setHoveredHour] = useState(null);
 
-  // Get current position based on selected hour
-  const currentPos = selectedTrack?.find(p => p.hourIndex === selectedHour) ||
+  // Use hovered hour if available, otherwise selected hour
+  const displayHour = hoveredHour ?? selectedHour;
+
+  // Get current position based on display hour
+  const currentPos = selectedTrack?.find(p => p.hourIndex === displayHour) ||
                      selectedTrack?.[selectedTrack.length - 1];
 
   // Calculate drift analysis (actual vs model)
   const calculateDriftAnalysis = () => {
     if (!selectedTrack || selectedTrack.length < 2) return null;
 
-    const prevPos = selectedTrack.find(p => p.hourIndex === selectedHour - 1);
+    // For display hour, use the previous hour for drift calculation
+    const prevHourIndex = displayHour === 0 ? 23 : displayHour - 1;
+    const prevPos = selectedTrack.find(p => p.hourIndex === prevHourIndex);
+
     if (!prevPos) return null;
 
     const actualSpeed = calculateSegmentSpeed(prevPos, currentPos);
@@ -32,37 +40,31 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
 
   const driftAnalysis = calculateDriftAnalysis();
 
-  // Fetch weather model data for verification
+  // Get weather data for current display hour (using cached data only)
   useEffect(() => {
-    const fetchModelData = async () => {
-      if (!currentPos) return;
-
-      setLoadingWeather(true);
-      try {
-        const pressureLevel = getPressureLevel(currentPos.alt);
-        const response = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${currentPos.lat}&longitude=${currentPos.lon}&hourly=windspeed_${pressureLevel},winddirection_${pressureLevel}&forecast_hours=1`
-        );
-        const data = await response.json();
-
-        if (data.hourly) {
-          setWeatherData({
-            speed: data.hourly[`windspeed_${pressureLevel}`]?.[0] || 0,
-            direction: data.hourly[`winddirection_${pressureLevel}`]?.[0] || 0,
-            pressureLevel: pressureLevel
-          });
-        }
-      } catch (error) {
-        console.error('Failed to fetch model data:', error);
-      } finally {
+    // Use timeout to avoid synchronous setState
+    const timer = setTimeout(() => {
+      if (!currentPos || !selectedTrack) {
+        setWeatherData(null);
         setLoadingWeather(false);
+        return;
       }
-    };
 
-    if (currentPos) {
-      fetchModelData();
-    }
-  }, [currentPos]);
+      // Use cached weather data for the specific hour and balloon
+      const cached = getCachedWeatherDataWithTime(
+        currentPos.lat,
+        currentPos.lon,
+        currentPos.alt,
+        displayHour,
+        selectedTrack[0]?.id
+      );
+
+      setWeatherData(cached);
+      setLoadingWeather(false);
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [currentPos?.lat, currentPos?.lon, currentPos?.alt, displayHour, selectedTrack?.[0]?.id]);
 
   // Prepare altitude profile data for chart
   const altitudeData = selectedTrack?.map(point => ({
@@ -74,6 +76,36 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
         point
       )) : 0
   })) || [];
+
+  // Calculate model accuracy data for difference visualization (using time-aware weather data)
+  const [modelAccuracyData, setModelAccuracyData] = useState([]);
+
+  useEffect(() => {
+    if (!selectedTrack) return;
+
+    // Fetch weather data for entire track at once (checks cache, only calls API for missing hours)
+    getWeatherDataForTrack(selectedTrack, selectedTrack[0]?.id).then(weatherData => {
+      // Calculate model accuracy data
+      const trackData = selectedTrack.map((point, index) => {
+        const actualSpeed = point.hourIndex > 0 ?
+          calculateSegmentSpeed(selectedTrack[index - 1], point) : 0;
+
+        // Use the fetched weather data for this point
+        const modelSpeed = weatherData[index]?.speed || 0;
+
+        return {
+          hour: point.hourIndex,
+          actual: actualSpeed,
+          model: modelSpeed,
+          difference: actualSpeed - modelSpeed,
+          absDifference: Math.abs(actualSpeed - modelSpeed),
+          percentError: modelSpeed > 0 ? (Math.abs(actualSpeed - modelSpeed) / modelSpeed) * 100 : 0
+        };
+      });
+
+      setModelAccuracyData(trackData);
+    });
+  }, [selectedTrack?.length, selectedTrack?.[0]?.id]); // Use primitive values instead of object
 
   if (!selectedTrack) {
     return (
@@ -94,11 +126,16 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
       {/* Header */}
       <div className="px-4 py-3 border-b">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold truncate">
-            Balloon {selectedTrack[0].id.substring(0, 8)}
-          </h3>
-          <Badge variant={selectedHour === 0 ? 'default' : 'outline'} className="text-xs">
-            {selectedHour === 0 ? 'LIVE' : `${selectedHour}h ago`}
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold">
+              Balloon
+            </h3>
+            <Badge variant="secondary" className="text-xs font-mono">
+              {selectedTrack[0]?.id || selectedTrack[0]?.balloonId || 'Unknown'}
+            </Badge>
+          </div>
+          <Badge variant={hoveredHour !== null ? 'secondary' : selectedHour === 0 ? 'default' : 'outline'} className="text-xs">
+            {hoveredHour !== null ? `Exploring: ${hoveredHour}h ago` : selectedHour === 0 ? 'LIVE' : `${selectedHour}h ago`}
           </Badge>
         </div>
       </div>
@@ -112,6 +149,10 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
             <h4 className="text-sm font-medium">Position</h4>
           </div>
           <div className="space-y-1.5 text-xs">
+            <div className="flex justify-between">
+              <span>ID</span>
+              <span className="font-mono font-semibold">{selectedTrack[0]?.id || 'Unknown'}</span>
+            </div>
             <div className="flex justify-between">
               <span>Lat, Lon</span>
               <span>{currentPos.lat.toFixed(2)}°, {currentPos.lon.toFixed(2)}°</span>
@@ -134,7 +175,18 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
             <h4 className="text-sm font-medium">Altitude Profile</h4>
           </div>
           <ResponsiveContainer width="100%" height={100}>
-          <LineChart data={altitudeData}>
+          <LineChart
+            data={altitudeData}
+            onMouseMove={(data) => {
+              if (data && data.activePayload && data.activePayload[0]) {
+                const hoveredData = data.activePayload[0].payload;
+                if (hoveredData && hoveredData.hour !== undefined) {
+                  setHoveredHour(hoveredData.hour);
+                }
+              }
+            }}
+            onMouseLeave={() => setHoveredHour(null)}
+          >
             <XAxis
               dataKey="hour"
               axisLine={false}
@@ -161,15 +213,50 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
               ]}
             />
             <Line
-              type="monotone"
+              type="monotoneX"
               dataKey="altitude"
-              stroke="hsl(var(--primary))"
-              strokeWidth={2}
-              dot={{ fill: 'hsl(var(--primary))', strokeWidth: 0, r: 3 }}
-              activeDot={{ r: 5, stroke: 'hsl(var(--primary))', strokeWidth: 2, fill: 'hsl(var(--card))' }}
+              stroke="#60a5fa"
+              strokeWidth={3}
+              dot={false}
+              activeDot={{ r: 4, fill: '#60a5fa' }}
             />
           </LineChart>
           </ResponsiveContainer>
+        </Card>
+
+        {/* Vector Drift Analysis */}
+        <Card className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <ArrowUpIcon className="w-4 h-4" />
+            <h4 className="text-sm font-medium">Vector Drift</h4>
+          </div>
+          <div className="space-y-2 text-xs">
+            {driftAnalysis && (
+              <>
+                <div className="flex justify-between">
+                  <span>Speed:</span>
+                  <span className="font-semibold">{driftAnalysis.actualSpeed.toFixed(1)} km/h</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Direction:</span>
+                  <span className="font-semibold">
+                    {calculateDriftVector(driftAnalysis.prevPos, driftAnalysis.currentPos).direction.toFixed(0)}°
+                  </span>
+                </div>
+                {weatherData && (
+                  <div className="flex justify-between">
+                    <span>Model Error:</span>
+                    <span className="font-semibold text-red-600">
+                      {Math.abs(driftAnalysis.actualSpeed - weatherData.speed).toFixed(1)} km/h
+                    </span>
+                  </div>
+                )}
+                <div className="text-xs text-muted-foreground mt-2">
+                  Balloon measures actual wind vectors
+                </div>
+              </>
+            )}
+          </div>
         </Card>
 
         {/* Model Verification */}
@@ -208,6 +295,73 @@ const Sidebar = ({ selectedTrack, selectedHour = 0 }) => {
               </div>
             </div>
           )}
+        </Card>
+
+        {/* Model Accuracy Chart */}
+        <Card className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <CloudIcon className="w-4 h-4" />
+            <h4 className="text-sm font-medium">Model Accuracy</h4>
+          </div>
+          <ResponsiveContainer width="100%" height={100}>
+            <LineChart data={modelAccuracyData}>
+              <XAxis
+                dataKey="hour"
+                axisLine={false}
+                tickLine={false}
+                tick={{ fontSize: 10 }}
+              />
+              <YAxis
+                axisLine={false}
+                tickLine={false}
+                tick={{ fontSize: 10 }}
+                domain={['dataMin - 10', 'dataMax + 10']}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: 'hsl(var(--card))',
+                  border: '1px solid hsl(var(--border))',
+                  borderRadius: '6px',
+                  fontSize: '12px'
+                }}
+                labelFormatter={(hour) => `${hour}h ago`}
+                formatter={(value, name) => [
+                  `${value.toFixed(1)} km/h`,
+                  name === 'actual' ? 'Balloon' :
+                  name === 'model' ? 'API' :
+                  name === 'difference' ? 'Difference' : name
+                ]}
+              />
+              <Line
+                type="monotoneX"
+                dataKey="actual"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                dot={false}
+                name="actual"
+              />
+              <Line
+                type="monotoneX"
+                dataKey="model"
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={false}
+                name="model"
+              />
+              <Line
+                type="monotoneX"
+                dataKey="difference"
+                stroke="#ef4444"
+                strokeWidth={2}
+                dot={false}
+                strokeDasharray="3,3"
+                name="difference"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+          <div className="flex justify-between text-xs text-muted-foreground mt-2">
+            <span>Blue: Balloon | Green: API | Red: Difference</span>
+          </div>
         </Card>
 
         {/* Atmospheric Conditions */}

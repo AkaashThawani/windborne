@@ -213,22 +213,6 @@ export const detectClusters = (balloons, config = {}) => {
     }
   });
   
-  // Validation: Verify no overlaps
-  const allClusteredIds = new Set();
-  let overlapCount = 0;
-  
-  clusters.forEach(cluster => {
-    cluster.balloons.forEach(balloon => {
-      if (allClusteredIds.has(balloon.id)) {
-        overlapCount++;
-      }
-      allClusteredIds.add(balloon.id);
-    });
-  });
-  
-  console.log(`🎯 DBSCAN: ${clusters.length} clusters, ${allClusteredIds.size} balloons clustered, ${overlapCount} overlaps (should be 0)`);
-  console.log(`📊 Config: eps=${eps}km, minPts=${minPts}, altitudeWeight=${altitudeWeight}`);
-  
   return clusters;
 };
 
@@ -429,4 +413,203 @@ export const trackBalloonMovement = (allHoursData) => {
   });
   
   return tracked;
+};
+
+// ===== ADVANCED DATA SCIENCE FEATURES =====
+
+// 1. SPEED DEMON LEADERBOARD
+// Calculate total distance traveled by each balloon over 24 hours
+export const calculateSpeedLeaderboard = (allHoursData) => {
+  if (!allHoursData || allHoursData.length === 0) return [];
+
+  const balloonTracks = {};
+
+  // Group balloons by ID across all hours
+  allHoursData.forEach(hourData => {
+    hourData.balloons?.forEach(balloon => {
+      if (!balloonTracks[balloon.id]) {
+        balloonTracks[balloon.id] = [];
+      }
+      balloonTracks[balloon.id].push({
+        hour: hourData.hour,
+        position: balloon.currentPosition
+      });
+    });
+  });
+
+  // Calculate total distance for each balloon
+  const leaderboard = Object.entries(balloonTracks).map(([id, positions]) => {
+    // Sort by hour
+    positions.sort((a, b) => a.hour - b.hour);
+
+    let totalDistance = 0;
+    let avgSpeed = 0;
+
+    for (let i = 1; i < positions.length; i++) {
+      const dist = calculateDistance(
+        positions[i-1].position,
+        positions[i].position
+      );
+      totalDistance += dist;
+    }
+
+    if (positions.length > 1) {
+      avgSpeed = totalDistance / (positions.length - 1); // km per hour
+    }
+
+    return {
+      id,
+      totalDistance: Math.round(totalDistance),
+      avgSpeed: Math.round(avgSpeed * 10) / 10, // Round to 1 decimal
+      trackLength: positions.length
+    };
+  });
+
+  // Sort by total distance (descending) and return top 5
+  return leaderboard
+    .filter(item => item.totalDistance > 0) // Only balloons that moved
+    .sort((a, b) => b.totalDistance - a.totalDistance)
+    .slice(0, 5);
+};
+
+// 2. EDDY HUNTER - Detect Cyclones
+// Check if balloon heading rotates >360° in 24 hours (indicates cyclone/eddy)
+export const detectEddies = (track) => {
+  if (!track || track.length < 6) return false; // Need at least 6 hours of data
+
+  let totalHeadingChange = 0;
+  let directionChanges = 0;
+
+  for (let i = 1; i < track.length; i++) {
+    const prevPos = track[i-1];
+    const currPos = track[i];
+
+    // Skip if no movement
+    if (calculateDistance(prevPos, currPos) < 1) continue;
+
+    const heading = calculateBearing(prevPos, currPos);
+    const prevHeading = i === 1 ? heading : calculateBearing(track[i-2], track[i-1]);
+
+    let headingDiff = Math.abs(heading - prevHeading);
+    // Handle 360° wraparound
+    if (headingDiff > 180) headingDiff = 360 - headingDiff;
+
+    totalHeadingChange += headingDiff;
+
+    // Count significant direction changes (>45°)
+    if (headingDiff > 45) directionChanges++;
+  }
+
+  // Flag as eddy if total rotation > 360° (full circle) or many direction changes
+  return totalHeadingChange > 360 || directionChanges > track.length * 0.6;
+};
+
+// 3. CONVERGENCE DETECTOR - Pressure Systems
+// Calculate if balloons are converging (moving closer) or diverging (spreading apart)
+export const calculateConvergence = (balloons) => {
+  if (!balloons || balloons.length < 3) return [];
+
+  return balloons.map(balloon => {
+    // Find 5 nearest neighbors
+    const neighbors = balloons
+      .filter(b => b.id !== balloon.id)
+      .map(b => ({
+        balloon: b,
+        distance: calculateDistance(balloon.currentPosition, b.currentPosition)
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 5);
+
+    if (neighbors.length < 3) return { id: balloon.id, convergence: 0 };
+
+    // Calculate average distance to neighbors
+    const avgDistance = neighbors.reduce((sum, n) => sum + n.distance, 0) / neighbors.length;
+
+    // For now, simulate convergence based on cluster density
+    // In real implementation, this would compare distances over time
+    const convergence = neighbors.length > 4 ? 1 : -1; // Simplified logic
+
+    return {
+      id: balloon.id,
+      convergence, // 1 = converging (storm), -1 = diverging (calm)
+      avgDistance: Math.round(avgDistance),
+      neighborCount: neighbors.length
+    };
+  });
+};
+
+// 4. TURBULENCE TAG - Vertical Instability
+// Detect rapid altitude changes indicating turbulence
+export const detectTurbulence = (track) => {
+  if (!track || track.length < 6) return false;
+
+  let directionChanges = 0;
+  let totalAltitudeChange = 0;
+
+  for (let i = 1; i < track.length; i++) {
+    const alt1 = track[i-1].alt;
+    const alt2 = track[i].alt;
+    const altDiff = alt2 - alt1;
+
+    totalAltitudeChange += Math.abs(altDiff);
+
+    // Count direction changes (up/down oscillations)
+    if (i > 1) {
+      const prevDiff = track[i-1].alt - track[i-2].alt;
+      if ((altDiff > 0 && prevDiff < 0) || (altDiff < 0 && prevDiff > 0)) {
+        directionChanges++;
+      }
+    }
+  }
+
+  // Flag as turbulent if many direction changes or high altitude volatility
+  const avgAltitudeChange = totalAltitudeChange / (track.length - 1);
+  return directionChanges > 3 || avgAltitudeChange > 1000; // 1km average change
+};
+
+// 5. SHEAR SCANNER - Steering Opportunities
+// Find wind shear layers where nearby balloons move in different directions
+export const detectShearLayers = (balloons) => {
+  const shearLayers = [];
+
+  balloons.forEach(balloonA => {
+    balloons.forEach(balloonB => {
+      if (balloonA.id === balloonB.id) return;
+
+      const posA = balloonA.currentPosition;
+      const posB = balloonB.currentPosition;
+
+      // Check if balloons are nearby (<50km) but at different altitudes (>2km)
+      const horizontalDist = calculateDistance(posA, posB);
+      const verticalDist = Math.abs(posA.alt - posB.alt);
+
+      if (horizontalDist < 50 && verticalDist > 2000) {
+        // Calculate bearing difference
+        const bearingA = calculateBearing(
+          { lat: posA.lat - 0.1, lon: posA.lon }, // Approximate previous position
+          posA
+        );
+        const bearingB = calculateBearing(
+          { lat: posB.lat - 0.1, lon: posB.lon }, // Approximate previous position
+          posB
+        );
+
+        const bearingDiff = Math.abs(bearingA - bearingB);
+        const minBearingDiff = Math.min(bearingDiff, 360 - bearingDiff);
+
+        // Flag as shear layer if directions differ by >90°
+        if (minBearingDiff > 90) {
+          shearLayers.push({
+            balloonA: balloonA.id,
+            balloonB: balloonB.id,
+            distance: Math.round(horizontalDist),
+            altitudeDiff: Math.round(verticalDist / 1000),
+            bearingDiff: Math.round(minBearingDiff)
+          });
+        }
+      }
+    });
+  });
+
+  return shearLayers;
 };

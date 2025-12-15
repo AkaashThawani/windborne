@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { CONFIG } from '../config';
 import { fetchWeatherData, getWeatherDescription } from '../services/dataFetcher';
 import { getAltitudeColor, ALTITUDE_LEGEND, getRegionColor, REGION_LEGEND } from '../services/analytics';
-import { calculateSegmentSpeed, calculateTrackSpeeds, getSpeedColor, getGlowClass } from '../utils/trajectoryEngine';
+import { calculateSegmentSpeed, getSpeedColor, getGlowClass } from '../utils/trajectoryEngine';
 
 // Fix for default marker icon issue in React-Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -103,22 +103,26 @@ const ClusterLines = React.memo(({ clusters, hoveredCluster, hoveredFilter }) =>
           b.currentPosition.lat,
           b.currentPosition.lon
         ]);
-        
-        return positions.map((pos, balloonIdx) => (
-          <Polyline
-            key={`cluster-${idx}-line-${balloonIdx}`}
-            positions={[
-              [cluster.center.lat, cluster.center.lon],
-              pos
-            ]}
-            pathOptions={{
-              color: '#6366f1',
-              weight: 2,
-              opacity: 0.6,
-              dashArray: '2, 4'
-            }}
-          />
-        ));
+
+        return (
+          <React.Fragment key={`cluster-${idx}`}>
+            {positions.map((pos, balloonIdx) => (
+              <Polyline
+                key={`cluster-${idx}-line-${balloonIdx}`}
+                positions={[
+                  [cluster.center.lat, cluster.center.lon],
+                  pos
+                ]}
+                pathOptions={{
+                  color: '#6366f1',
+                  weight: 2,
+                  opacity: 0.6,
+                  dashArray: '2, 4'
+                }}
+              />
+            ))}
+          </React.Fragment>
+        );
       })}
       
       {hoveredCluster && clusters.map((cluster, idx) => {
@@ -245,6 +249,58 @@ function darkenColor(color, percent) {
     (B < 255 ? B < 1 ? 0 : B : 255))
     .toString(16)
     .slice(1);
+}
+
+// Interpolation helper functions for smooth animation
+function interpolatePosition(pos1, pos2, fraction) {
+  if (!pos1 || !pos2) return pos1 || pos2;
+  return {
+    lat: pos1.lat + (pos2.lat - pos1.lat) * fraction,
+    lon: pos1.lon + (pos2.lon - pos1.lon) * fraction,
+    alt: pos1.alt + (pos2.alt - pos1.alt) * fraction,
+    id: pos1.id,
+    hourIndex: pos1.hourIndex
+  };
+}
+
+function getInterpolatedPosition(track, selectedHour) {
+  // Find the two positions that bracket selectedHour
+  // hourCeil is the older position (higher hour index)
+  // hourFloor is the newer position (lower hour index)
+  const hourCeil = Math.ceil(selectedHour);
+  const hourFloor = Math.floor(selectedHour);
+  
+  // Special handling for exact integer hours to prevent pauses
+  // When at exact hour (e.g., 23.00000), still interpolate with next hour
+  let olderPos, newerPos;
+  
+  if (hourCeil === hourFloor) {
+    // At exact integer hour - interpolate with next hour for smooth transition
+    olderPos = track.find(p => p.hourIndex === hourCeil);
+    newerPos = track.find(p => p.hourIndex === hourFloor - 1);
+    
+    if (!olderPos || !newerPos) {
+      return olderPos || newerPos;
+    }
+    
+    // At exact boundary, fraction = 0 (fully at older position)
+    return olderPos;
+  }
+  
+  olderPos = track.find(p => p.hourIndex === hourCeil);
+  newerPos = track.find(p => p.hourIndex === hourFloor);
+  
+  if (!olderPos || !newerPos) {
+    return olderPos || newerPos;
+  }
+  
+  // Calculate interpolation fraction (0 to 1)
+  // INVERTED: As selectedHour decreases (24→0), fraction should increase (0→1)
+  // fraction = 0 means we're at the older position (hourCeil)
+  // fraction = 1 means we're at the newer position (hourFloor)
+  const fraction = hourCeil - selectedHour;
+  // Interpolate FROM older TO newer (forward in time as selectedHour decreases)
+  return interpolatePosition(olderPos, newerPos, fraction);
 }
 
 // Lazy popup content
@@ -412,85 +468,203 @@ function shouldHighlight(balloon, hoveredFilter, clusters) {
   }
 }
 
-// Flow Trails Component - Speed-colored trajectory lines
-const FlowTrails = React.memo(({ tracks }) => {
-  if (!tracks || Object.keys(tracks).length === 0) return null;
+// Flow Trails Component - Speed-colored trajectory lines (only for selected balloon)
+const FlowTrails = React.memo(({ selectedTrack }) => {
+  if (!selectedTrack || selectedTrack.length === 0) return null;
 
   const trailElements = [];
 
-  Object.entries(tracks).forEach(([balloonId, track]) => {
-    track.forEach((point, i) => {
-      if (i === 0) return;
+  selectedTrack.forEach((point, i) => {
+    if (i === 0) return;
 
-      const prevPoint = track[i - 1];
-      const speed = calculateSegmentSpeed(prevPoint, point);
-      const color = getSpeedColor(speed);
-      const glowClass = getGlowClass(speed);
+    const prevPoint = selectedTrack[i - 1];
+    const speed = calculateSegmentSpeed(prevPoint, point);
+    const color = getSpeedColor(speed);
+    const glowClass = getGlowClass(speed);
 
-      // Opacity based on age (older = more transparent)
-      const opacity = (i / track.length) * 0.8 + 0.2;
+    // Opacity based on age (older = more transparent)
+    const opacity = (i / selectedTrack.length) * 0.8 + 0.2;
 
-      trailElements.push(
-        <Polyline
-          key={`trail-${balloonId}-${i}`}
-          positions={[
-            [prevPoint.lat, prevPoint.lon],
-            [point.lat, point.lon]
-          ]}
-          pathOptions={{
-            color: color,
-            weight: 3,
-            opacity: opacity,
-            lineCap: 'round'
-          }}
-          className={glowClass}
-        />
-      );
-    });
+    trailElements.push(
+      <Polyline
+        key={`trail-selected-${i}`}
+        positions={[
+          [prevPoint.lat, prevPoint.lon],
+          [point.lat, point.lon]
+        ]}
+        pathOptions={{
+          color: color,
+          weight: 4,
+          opacity: opacity,
+          lineCap: 'round'
+        }}
+        className={glowClass}
+      />
+    );
   });
 
   return <>{trailElements}</>;
 });
 
-// Flow Markers Component - Current position markers with speed-based styling
-const FlowMarkers = React.memo(({ tracks, onBalloonClick }) => {
+// Easing function for smooth, natural motion (like Google Maps)
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// Smooth marker animation component using requestAnimationFrame
+const SmoothMarker = ({ track, selectedHourRef, selectedTrack, onBalloonClick }) => {
+  const markerRef = React.useRef(null);
+  const animationRef = React.useRef(null);
+
+  // Get initial position for rendering (start at hour 25)
+  const initialPos = getInterpolatedPosition(track, 25.0);
+
+  // Use ref for continuous smooth animation without React re-renders
+  React.useEffect(() => {
+    if (!markerRef.current || !initialPos) return;
+
+    const marker = markerRef.current;
+    let isAnimating = true;
+    let lastColorUpdate = 0;
+
+    function animate() {
+      if (!isAnimating || !selectedHourRef || !markerRef.current) return;
+
+      // Update position from ref (smooth, no React re-render)
+      const currentHour = selectedHourRef.current;
+      const targetPos = getInterpolatedPosition(track, currentHour);
+
+      if (targetPos && marker) {
+        try {
+          const currentLatLng = marker.getLatLng();
+          if (!currentLatLng) return;
+
+          const targetLat = targetPos.lat;
+          const targetLng = targetPos.lon;
+
+          // Calculate distance to target
+          const distance = Math.sqrt(
+            Math.pow(targetLat - currentLatLng.lat, 2) +
+            Math.pow(targetLng - currentLatLng.lng, 2)
+          );
+
+          // Only update if distance is significant
+          if (distance > 0.00001) {
+            // Smooth interpolation (ease towards target)
+            const smoothing = 0.3; // Lower = smoother but slower
+            const newLat = currentLatLng.lat + (targetLat - currentLatLng.lat) * smoothing;
+            const newLng = currentLatLng.lng + (targetLng - currentLatLng.lng) * smoothing;
+            marker.setLatLng([newLat, newLng]);
+          }
+
+          // Update color based on current speed (every 500ms to avoid too frequent updates)
+          const now = Date.now();
+          if (now - lastColorUpdate > 500) {
+            const hourCeil = Math.ceil(currentHour);
+            const hourFloor = Math.floor(currentHour);
+            const pos1 = track.find(p => p.hourIndex === hourCeil);
+            const pos2 = track.find(p => p.hourIndex === hourFloor);
+            
+            if (pos1 && pos2 && hourCeil !== hourFloor) {
+              const speed = calculateSegmentSpeed(pos1, pos2);
+              const isSelected = selectedTrack && track === selectedTrack;
+              const newColor = isSelected ? getSpeedColor(speed) : 
+                              (!selectedTrack ? getSpeedColor(speed) : '#9CA3AF');
+              
+              // Update marker color directly
+              const pathOptions = marker.options;
+              if (pathOptions.fillColor !== newColor) {
+                marker.setStyle({ fillColor: newColor });
+              }
+            }
+            lastColorUpdate = now;
+          }
+        } catch {
+          // Marker was unmounted or canvas context lost, stop animating
+          isAnimating = false;
+          return;
+        }
+      }
+
+      if (isAnimating) {
+        animationRef.current = requestAnimationFrame(animate);
+      }
+    }
+
+    animationRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      isAnimating = false;
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [track, selectedHourRef, initialPos, selectedTrack]);
+
+  if (!initialPos) return null;
+
+  // Calculate initial speed for color (at hour 25)
+  const pos1 = track.find(p => p.hourIndex === 25);
+  const pos2 = track.find(p => p.hourIndex === 24);
+  
+  let speed = 0;
+  if (pos1 && pos2) {
+    speed = calculateSegmentSpeed(pos1, pos2);
+  }
+
+  // Focus mode styling
+  const isSelected = selectedTrack && track === selectedTrack;
+  const opacity = isSelected || !selectedTrack ? 1 : 0.3;
+  const color = isSelected ?
+    getSpeedColor(speed) :
+    (!selectedTrack ? getSpeedColor(speed) : '#9CA3AF');
+  const radius = isSelected ? 7 : 6;
+
+  return (
+    <CircleMarker
+      ref={markerRef}
+      center={[initialPos.lat, initialPos.lon]}
+      radius={radius}
+      pathOptions={{
+        color: '#fff',
+        fillColor: color,
+        fillOpacity: opacity,
+        weight: 2
+      }}
+      eventHandlers={{
+        click: () => onBalloonClick && onBalloonClick(track)
+      }}
+    >
+      <Popup>
+        <div>
+          <strong>Balloon {initialPos.id.substring(8)}</strong>
+          <p>Speed: {speed.toFixed(1)} km/h</p>
+          <p>Altitude: {(initialPos.alt / 1000).toFixed(1)} km</p>
+          <p>Time: 25h ago</p>
+        </div>
+      </Popup>
+    </CircleMarker>
+  );
+};
+
+// Flow Markers Component - Smooth position updates with speed-based styling and focus mode
+const FlowMarkers = React.memo(({ tracks, selectedHourRef, selectedTrack, onBalloonClick }) => {
   if (!tracks || Object.keys(tracks).length === 0) return null;
 
-  return Object.values(tracks).map(track => {
-    const currentPos = track[track.length - 1];
-    const speeds = calculateTrackSpeeds(track);
-    const currentSpeed = speeds[speeds.length - 1]?.speed || 0;
-
-    const color = getSpeedColor(currentSpeed);
-    const glowClass = getGlowClass(currentSpeed);
-
-    return (
-      <CircleMarker
-        key={currentPos.id}
-        center={[currentPos.lat, currentPos.lon]}
-        radius={6}
-        pathOptions={{
-          color: '#fff',
-          fillColor: color,
-          fillOpacity: 1,
-          weight: 2
-        }}
-        className={glowClass}
-        eventHandlers={{
-          click: () => onBalloonClick && onBalloonClick(track)
-        }}
-      >
-        <Popup>
-          <div>
-            <strong>Balloon {currentPos.id}</strong>
-            <p>Speed: {currentSpeed.toFixed(1)} km/h</p>
-            <p>Altitude: {(currentPos.alt / 1000).toFixed(1)} km</p>
-            <p>24h Track: {track.length} positions</p>
-          </div>
-        </Popup>
-      </CircleMarker>
-    );
-  });
+  return Object.values(tracks).map(track => (
+    <SmoothMarker
+      key={track[0]?.id}
+      track={track}
+      selectedHourRef={selectedHourRef}
+      selectedTrack={selectedTrack}
+      onBalloonClick={onBalloonClick}
+    />
+  ));
+}, (prevProps, nextProps) => {
+  // Only re-render if tracks or selectedTrack changes (NOT selectedHour!)
+  // This allows smooth 24h animation without re-render jerks
+  return prevProps.selectedTrack === nextProps.selectedTrack &&
+         prevProps.tracks === nextProps.tracks;
 });
 
 function getRegion(position) {
@@ -523,7 +697,9 @@ export default function BalloonMap({
   selectedRegion = null,
   hoveredFilter = null,
   showGrid = false,
-  hoveredCluster = null
+  hoveredCluster = null,
+  selectedTrack = null,
+  selectedHourRef = null
 }) {
   // Only use FitBounds on initial load, not when clusters are available (WHERE tab)
   const shouldUseFitBounds = activeTab !== 'where' || clusters.length === 0;
@@ -545,7 +721,7 @@ export default function BalloonMap({
       const highlighted = shouldHighlight(balloon, hoveredFilter, clusters);
       return (
         <BalloonMarker
-          key={balloon.id}
+          key={`balloon-${balloon.id}`}
           balloon={balloon}
           activeTab={activeTab}
           clusters={clusters}
@@ -562,13 +738,18 @@ export default function BalloonMap({
     if (viewMode === 'flow') {
       return (
         <>
-          <FlowTrails tracks={tracks} />
-          <FlowMarkers tracks={tracks} onBalloonClick={onBalloonClick} />
+          <FlowTrails selectedTrack={selectedTrack} />
+          <FlowMarkers
+            tracks={tracks}
+            selectedHourRef={selectedHourRef}
+            selectedTrack={selectedTrack}
+            onBalloonClick={onBalloonClick}
+          />
         </>
       );
     } else {
       // Static analysis mode
-      return markers;
+      return <>{markers}</>;
     }
   };
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import BalloonMap from './components/BalloonMap';
 import Sidebar from './components/Sidebar';
 import TimeScrubber from './components/TimeScrubber';
@@ -12,22 +12,13 @@ import { processConstellationHistory } from './utils/trajectoryEngine';
 import { CONFIG } from './config';
 import { Card } from './components/ui/card';
 import { Button } from './components/ui/button';
-import {
-  CubeIcon,
-  ClockIcon,
-  ArrowUpIcon,
-  EyeIcon,
-  ChartBarIcon
-} from '@heroicons/react/24/outline';
 
 function App() {
   // Data states
   const [balloons, setBalloons] = useState([]);
   const [tracks, setTracks] = useState({});
-  const [filteredBalloons, setFilteredBalloons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [lastUpdate, setLastUpdate] = useState(null);
 
   // UI states
   const [activeTab, setActiveTab] = useState('where');
@@ -41,21 +32,32 @@ function App() {
 
   // Mission control states
   const [selectedTrack, setSelectedTrack] = useState(null);
-  const [selectedHour, setSelectedHour] = useState(0);
-  const [viewMode, setViewMode] = useState('static'); // 'flow' or 'static'
+  const selectedHourRef = useRef(23.0); // Ref for smooth animation (no re-renders) - starts at hour 23
+  const [selectedHour, setSelectedHour] = useState(23.0); // State for UI display only
+  const [activeViewTab, setActiveViewTab] = useState('flow'); // 'flow' or 'analysis'
   const [isPlaying, setIsPlaying] = useState(false);
+  const [autoplayInitiated, setAutoplayInitiated] = useState(false); // Track if autoplay has started for current flow session
 
   const [stats, setStats] = useState({
     totalBalloons: 0,
     hoursWithData: 0,
     avgAltitude: 0
   });
-  
+
+  // View tabs for flow/analysis modes
+  const viewTabs = [
+    { id: 'flow', label: 'FLOW' },
+    { id: 'analysis', label: 'ANALYSIS' }
+  ];
+
   const tabs = [
     { id: 'where', label: 'WHERE' },
     { id: 'altitude', label: 'HOW HIGH' },
     { id: 'density', label: 'HOW MANY' }
   ];
+
+  // Derived view mode for backward compatibility
+  const viewMode = activeViewTab === 'flow' ? 'flow' : 'static';
 
   const loadBalloonData = useCallback(async () => {
     try {
@@ -72,11 +74,8 @@ function App() {
       
       const processed = processBalloonData(allHoursData);
       const trajectoryTracks = processConstellationHistory(allHoursData);
-      console.log('Processed Balloons:', processed);
-      console.log('Trajectory Tracks:', trajectoryTracks);
       setBalloons(processed);
       setTracks(trajectoryTracks);
-      setFilteredBalloons(processed);
       
       // Calculate statistics
       const totalBalloons = processed.length;
@@ -101,8 +100,7 @@ function App() {
         northernHem: regionalDist.northernHem,
         southernHem: regionalDist.southernHem
       });
-      
-      setLastUpdate(new Date());
+
       setLoading(false);
     } catch (err) {
       setError(`Failed to load data: ${err.message}`);
@@ -111,59 +109,159 @@ function App() {
   }, []);
 
   useEffect(() => {
-    loadBalloonData();
-    
+    // Use timeout to avoid synchronous setState in effect
+    const timer = setTimeout(() => {
+      loadBalloonData();
+    }, 0);
+
     // Set up auto-refresh
     const interval = setInterval(() => {
       loadBalloonData();
     }, CONFIG.REFRESH_INTERVAL);
-    
-    return () => clearInterval(interval);
+
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, [loadBalloonData]);
   
-  // Apply altitude filter
-  useEffect(() => {
-    const filtered = balloons.filter(b => {
+  // Apply altitude filter and balloon selection filter (derived state)
+  // In ANALYSIS mode, use historical positions based on selectedHour
+  const filteredBalloons = useMemo(() => {
+    let filtered = balloons.map(b => {
+      // In ANALYSIS mode, use position from selectedHour
+      if (viewMode === 'static' && tracks[b.id]) {
+        const track = tracks[b.id];
+        const hourPos = track.find(p => p.hourIndex === Math.round(selectedHour));
+        if (hourPos) {
+          return {
+            ...b,
+            currentPosition: {
+              lat: hourPos.lat,
+              lon: hourPos.lon,
+              alt: hourPos.alt,
+              hour: hourPos.hourIndex,
+              id: hourPos.id
+            }
+          };
+        }
+      }
+      return b; // Fallback to current position
+    }).filter(b => {
       const alt = b.currentPosition.alt;
       return alt >= altitudeFilter[0] && alt <= altitudeFilter[1];
     });
-    setFilteredBalloons(filtered);
-  }, [balloons, altitudeFilter]);
+
+    // If a track is selected AND we're in flow mode, only show that balloon
+    if (selectedTrack && viewMode === 'flow') {
+      filtered = filtered.filter(b => b.id === selectedTrack[0]?.id);
+    }
+
+    return filtered;
+  }, [balloons, tracks, selectedHour, viewMode, altitudeFilter, selectedTrack]);
+
+  // Recalculate clusters and dense regions based on selectedHour in ANALYSIS mode
+  const dynamicClusters = useMemo(() => {
+    if (viewMode === 'static') {
+      return detectClusters(filteredBalloons);
+    }
+    return clusters; // Use initial clusters in FLOW mode
+  }, [viewMode, filteredBalloons, clusters]);
+
+  const dynamicDenseRegions = useMemo(() => {
+    if (viewMode === 'static') {
+      const densityGrid = calculateDensity(filteredBalloons);
+      return densityGrid.sort((a, b) => b.count - a.count).slice(0, 10);
+    }
+    return denseRegions; // Use initial regions in FLOW mode
+  }, [viewMode, filteredBalloons, denseRegions]);
   
   const handleAltitudeFilter = (range) => {
     setAltitudeFilter(range);
   };
   
   const handleRegionClick = (region) => {
-    console.log('Region selected:', region);
     setSelectedRegion(region);
     // Clear selection after 5 seconds
     setTimeout(() => setSelectedRegion(null), 5000);
   };
   
-  const handleWhereRegionClick = (regionName) => {
-    console.log('WHERE panel region clicked:', regionName);
+  const handleWhereRegionClick = () => {
     // Could implement region filtering here
   };
 
-  // Time animation effect
+  // Time animation effect - ref-based for smooth animation without React re-renders
+  // State updates every frame for UI display, but animation reads from ref for smoothness
   useEffect(() => {
     if (!isPlaying) return;
 
     const interval = setInterval(() => {
-      setSelectedHour(prev => (prev + 1) % 24);
-    }, 1000); // 1 second per hour
+      // Update ref (no re-render, used by animation loop!)
+      selectedHourRef.current -= 1/60; // 1/60 hour = 1 minute steps
+      if (selectedHourRef.current < 0) {
+        selectedHourRef.current = 0;
+        setIsPlaying(false);
+      }
+
+      // Update React state every frame for UI display (TimeScrubber)
+      // This won't cause animation jerkiness because SmoothMarker reads from ref
+      setSelectedHour(Math.round(selectedHourRef.current * 100000) / 100000);
+    }, 100); // 100ms = 10 updates per second
 
     return () => clearInterval(interval);
   }, [isPlaying]);
+  
+  // Sync ref with state when user manually changes time
+  useEffect(() => {
+    selectedHourRef.current = selectedHour;
+  }, [selectedHour]);
+
+  // Autoplay animation when entering flow view (only once per session)
+  useEffect(() => {
+    if (viewMode === 'flow' && !isPlaying && !autoplayInitiated) {
+      // Use timeout to avoid synchronous setState in effect
+      const timer = setTimeout(() => {
+        setIsPlaying(true);
+        setAutoplayInitiated(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [viewMode, isPlaying, autoplayInitiated]);
 
   const handleBalloonClick = (track) => {
     setSelectedTrack(track);
-    setViewMode('flow'); // Switch to flow view when balloon is selected
+    setActiveViewTab('flow'); // Switch to flow view when balloon is selected
   };
 
   const handlePlayPause = () => {
     setIsPlaying(!isPlaying);
+  };
+
+  // Navigation handlers for time control
+  const handlePrevHour = () => {
+    setIsPlaying(false); // Pause autoplay when user manually controls time
+    setSelectedHour(prev => Math.min(23, prev + 1)); // Go back in time (increase hour index)
+  };
+
+  const handleNextHour = () => {
+    setIsPlaying(false); // Pause autoplay when user manually controls time
+    setSelectedHour(prev => Math.max(0, prev - 1)); // Go forward in time (decrease hour index)
+  };
+
+  // Handle view tab changes with autoplay reset logic
+  const handleViewTabChange = (tab) => {
+    setActiveViewTab(tab);
+    if (tab === 'analysis') {
+      setSelectedTrack(null); // Clear selected balloon when switching to analysis
+      setAutoplayInitiated(false); // Reset for next flow view
+      setIsPlaying(false); // Stop animation
+      setSelectedHour(23.0); // Reset to hour 23 for analysis mode
+      selectedHourRef.current = 23.0;
+    } else if (tab === 'flow') {
+      setAutoplayInitiated(false); // Allow autoplay to start for new flow session
+      setSelectedHour(23.0); // Reset to hour 23 for flow mode
+      selectedHourRef.current = 23.0;
+    }
   };
 
   return (
@@ -183,45 +281,29 @@ function App() {
             <TimeScrubber
               currentHour={selectedHour}
               onHourChange={setSelectedHour}
-              maxHours={24}
               isPlaying={isPlaying}
               onPlayPause={handlePlayPause}
+              onPrevHour={handlePrevHour}
+              onNextHour={handleNextHour}
+              onClearSelection={() => setSelectedTrack(null)}
+              viewMode={viewMode}
             />
 
-            {/* View Buttons */}
-            <div className="flex gap-2 shrink-0">
-              <Button
-                variant={viewMode === 'flow' ? 'default' : 'outline'}
+            {/* View Tabs */}
+            <div className="shrink-0">
+              <TabPanel
+                tabs={viewTabs}
+                activeTab={activeViewTab}
+                onChange={handleViewTabChange}
                 size="sm"
-                onClick={() => setViewMode('flow')}
-                title="Flow View - Track balloon movements"
-              >
-                <EyeIcon className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={viewMode === 'static' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setViewMode('static')}
-                title="Analysis View - Explore insights"
-              >
-                <ChartBarIcon className="w-4 h-4" />
-              </Button>
+              />
             </div>
 
-            {/* Stats (Inline with Icons) */}
+            {/* Stats (With Proper Labels) */}
             <div className="flex items-center gap-4 text-sm shrink-0">
-              <span className="flex items-center gap-1">
-                <CubeIcon className="w-4 h-4" />
-                {stats.totalBalloons}
-              </span>
-              <span className="flex items-center gap-1">
-                <ArrowUpIcon className="w-4 h-4" />
-                {(stats.avgAltitude / 1000).toFixed(1)}km
-              </span>
-              <span className="flex items-center gap-1">
-                <ClockIcon className="w-4 h-4" />
-                {stats.hoursWithData}h
-              </span>
+              <span>{stats.totalBalloons} Balloons</span>
+              <span>{(stats.avgAltitude / 1000).toFixed(1)}km Avg Alt</span>
+              <span>{stats.hoursWithData}h Data</span>
             </div>
           </div>
         </div>
@@ -256,12 +338,15 @@ function App() {
               viewMode={viewMode}
               onBalloonClick={handleBalloonClick}
               activeTab={activeTab}
-              clusters={clusters}
-              denseRegions={denseRegions}
+              clusters={dynamicClusters}
+              denseRegions={dynamicDenseRegions}
               selectedRegion={selectedRegion}
               hoveredFilter={hoveredFilter}
               showGrid={showGrid}
               hoveredCluster={hoveredCluster}
+              selectedTrack={selectedTrack}
+              selectedHour={selectedHour}
+              selectedHourRef={selectedHourRef}
             />
           </div>
 
@@ -272,6 +357,20 @@ function App() {
                 selectedTrack={selectedTrack}
                 selectedHour={selectedHour}
               />
+            ) : viewMode === 'flow' ? (
+              <div className="flex flex-col h-full items-center justify-center p-6">
+                <div className="text-center space-y-4">
+                  <div className="text-6xl">🎈</div>
+                  <h3 className="text-lg font-semibold">Flow View Mode</h3>
+                  <p className="text-sm">Click on any balloon marker to view:</p>
+                  <ul className="text-sm text-left space-y-2 max-w-[280px] mx-auto">
+                    <li>• 24-hour flight trajectory</li>
+                    <li>• Altitude profile over time</li>
+                    <li>• Actual vs model speed comparison</li>
+                    <li>• Drift analysis & deviations</li>
+                  </ul>
+                </div>
+              </div>
             ) : (
               <TabPanel
                 tabs={tabs}
@@ -281,7 +380,7 @@ function App() {
                 {activeTab === 'where' && (
                   <WherePanel
                     balloons={filteredBalloons}
-                    clusters={clusters}
+                    clusters={dynamicClusters}
                     onRegionClick={handleWhereRegionClick}
                     onHoverFilter={setHoveredFilter}
                     onClusterHover={setHoveredCluster}
