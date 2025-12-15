@@ -74,12 +74,13 @@ function validateBalloonData(data, hour) {
 }
 
 /**
- * Fetch all 24 hours of balloon data starting from 24 hours ago
+ * Fetch all 24 hours of balloon data (hours 0-23)
+ * Hour 0 = current, Hour 23 = 23 hours ago
  * @returns {Promise<Array>} Array of balloon data for each hour
  */
 export async function fetchAllBalloonData() {
   const promises = [];
-  for (let hour = 24; hour >= 0; hour--) {
+  for (let hour = 23; hour >= 0; hour--) {
     promises.push(fetchBalloonDataForHour(hour));
   }
 

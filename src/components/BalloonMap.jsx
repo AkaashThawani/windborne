@@ -551,8 +551,8 @@ const SmoothMarker = ({ track, selectedHourRef, selectedTrack, onBalloonClick })
   const markerRef = React.useRef(null);
   const animationRef = React.useRef(null);
 
-  // Get initial position for rendering (start at hour 25)
-  const initialPos = getInterpolatedPosition(track, 25.0);
+  // Get initial position for rendering (start at hour 23)
+  const initialPos = getInterpolatedPosition(track, 23.0);
 
   // Use ref for continuous smooth animation without React re-renders
   React.useEffect(() => {
@@ -638,9 +638,9 @@ const SmoothMarker = ({ track, selectedHourRef, selectedTrack, onBalloonClick })
 
   if (!initialPos) return null;
 
-  // Calculate initial speed for color (at hour 25)
-  const pos1 = track.find(p => p.hourIndex === 25);
-  const pos2 = track.find(p => p.hourIndex === 24);
+  // Calculate initial speed for color (at hour 23)
+  const pos1 = track.find(p => p.hourIndex === 23);
+  const pos2 = track.find(p => p.hourIndex === 22);
   
   let speed = 0;
   if (pos1 && pos2) {

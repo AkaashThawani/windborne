@@ -228,17 +228,17 @@ function App() {
     selectedHourRef.current = selectedHour;
   }, [selectedHour]);
 
-  // Autoplay animation when entering flow view (only once per session)
-  useEffect(() => {
-    if (viewMode === 'flow' && !isPlaying && !autoplayInitiated) {
-      // Use timeout to avoid synchronous setState in effect
-      const timer = setTimeout(() => {
-        setIsPlaying(true);
-        setAutoplayInitiated(true);
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [viewMode, isPlaying, autoplayInitiated]);
+  // Autoplay disabled - users must manually press play to start animation
+  // useEffect(() => {
+  //   if (viewMode === 'flow' && !isPlaying && !autoplayInitiated) {
+  //     // Use timeout to avoid synchronous setState in effect
+  //     const timer = setTimeout(() => {
+  //       setIsPlaying(true);
+  //       setAutoplayInitiated(true);
+  //     }, 100);
+  //     return () => clearTimeout(timer);
+  //   }
+  // }, [viewMode, isPlaying, autoplayInitiated]);
 
   const handleBalloonClick = (track) => {
     setSelectedTrack(track);

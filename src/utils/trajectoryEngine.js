@@ -20,10 +20,9 @@ export const processConstellationHistory = (all24HoursData) => {
   // Structure: { "balloon-123": [ { lat, lon, alt, time: 0 }, { lat, lon, alt, time: 1 } ... ] }
   const tracks = {};
 
-  // Process from oldest (24h ago) to newest (current) to build chronological tracks
-  // Data comes as hours 24-0, where hour 24 = 24h ago, hour 0 = NOW
-  // We want hourIndex to represent hours ago: 25 = 25h ago (future), 24 = 24h ago, 0 = NOW
-  for (let hour = 24; hour >= 0; hour--) {
+  // Process from oldest (23h ago) to newest (current) to build chronological tracks
+  // Data comes as hours 23-0, where hour 23 = 23h ago, hour 0 = NOW
+  for (let hour = 23; hour >= 0; hour--) {
     const hourData = all24HoursData.find(data => data?.hour === hour);
     if (!hourData?.balloons) continue;
 
@@ -39,26 +38,9 @@ export const processConstellationHistory = (all24HoursData) => {
       tracks[balloonId].push({
         id: balloonId, // Include the balloon ID
         ...balloon,
-        hourIndex: hour, // 24 = 24h ago, 0 = now
+        hourIndex: hour, // 23 = 23h ago, 0 = now
         timestamp: new Date(Date.now() - (hour * 3600000)).toISOString()
       });
-    });
-  }
-
-  // Add hour 25 (duplicate of hour 0 for smooth animation start)
-  const hour0Data = all24HoursData.find(data => data?.hour === 0);
-  if (hour0Data?.balloons) {
-    hour0Data.balloons.forEach(balloon => {
-      const balloonId = balloon.id || `balloon-${balloon.index}`;
-      if (tracks[balloonId]) {
-        // Add current position (hour 0) as "hour 25" (future position)
-        tracks[balloonId].push({
-          id: balloonId,
-          ...balloon,
-          hourIndex: 25, // Future position (1 hour ahead)
-          timestamp: new Date(Date.now() + 3600000).toISOString()
-        });
-      }
     });
   }
 

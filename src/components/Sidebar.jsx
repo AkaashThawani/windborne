@@ -92,12 +92,25 @@ const Sidebar = React.memo(({ selectedTrack, selectedHour = 0, tracks, allBalloo
   useEffect(() => {
     if (!selectedTrack) return;
 
+    // Filter to only hours 0-23 (exclude hour 25 used for initial positioning)
+    const validTrack = selectedTrack.filter(point => point.hourIndex >= 0 && point.hourIndex <= 23);
+    
+    // Sort by hour index descending (23 -> 0) to ensure proper order
+    validTrack.sort((a, b) => b.hourIndex - a.hourIndex);
+
     // Fetch weather data for entire track at once (checks cache, only calls API for missing hours)
-    getWeatherDataForTrack(selectedTrack, selectedTrack[0]?.id).then(weatherData => {
+    getWeatherDataForTrack(validTrack, selectedTrack[0]?.id).then(weatherData => {
       // Calculate model accuracy data
-      const trackData = selectedTrack.map((point, index) => {
-        const actualSpeed = point.hourIndex > 0 ?
-          calculateSegmentSpeed(selectedTrack[index - 1], point) : 0;
+      const trackData = validTrack.map((point, index) => {
+        // For speed calculation, we need the previous hour (higher hour index)
+        // Skip hour 23 since we don't have hour 24 data
+        let actualSpeed = 0;
+        if (point.hourIndex < 23 && index > 0) {
+          const prevPoint = validTrack[index - 1];
+          if (prevPoint && prevPoint.hourIndex === point.hourIndex + 1) {
+            actualSpeed = calculateSegmentSpeed(prevPoint, point);
+          }
+        }
 
         // Use the fetched weather data for this point
         const modelSpeed = weatherData[index]?.speed || 0;
@@ -226,8 +239,8 @@ const Sidebar = React.memo(({ selectedTrack, selectedHour = 0, tracks, allBalloo
           </div>
         </Card>
 
-        {/* Speed Demon Leaderboard */}
-        {advancedFeatures?.speed && (
+        {/* Speed Demon Leaderboard - DISABLED */}
+        {/* {advancedFeatures?.speed && (
           <Card className="p-3 border-yellow-500/50">
             <div className="flex items-center gap-2 mb-2">
               <TrophyIcon className="w-4 h-4 text-yellow-500" />
@@ -247,7 +260,7 @@ const Sidebar = React.memo(({ selectedTrack, selectedHour = 0, tracks, allBalloo
               </div>
             </div>
           </Card>
-        )}
+        )} */}
 
         {/* Eddy Hunter */}
         {advancedFeatures?.eddy !== undefined && (
@@ -508,7 +521,7 @@ const Sidebar = React.memo(({ selectedTrack, selectedHour = 0, tracks, allBalloo
                 axisLine={false}
                 tickLine={false}
                 tick={{ fontSize: 10 }}
-                domain={['dataMin - 10', 'dataMax + 10']}
+                domain={[0, 150]}
               />
               <Tooltip
                 contentStyle={{
