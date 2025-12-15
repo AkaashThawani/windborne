@@ -1,19 +1,35 @@
 import { useState, useEffect, useCallback } from 'react';
 import BalloonMap from './components/BalloonMap';
+import Sidebar from './components/Sidebar';
+import TimeScrubber from './components/TimeScrubber';
 import { TabPanel } from './components/common/TabPanel';
 import { WherePanel } from './components/insights/WherePanel';
 import { HowHighPanel } from './components/insights/HowHighPanel';
 import { HowManyPanel } from './components/insights/HowManyPanel';
 import { fetchAllBalloonData, processBalloonData } from './services/dataFetcher';
 import { calculateRegionalDistribution, calculateAltitudeStats, detectClusters, calculateDensity } from './services/analytics';
+import { processConstellationHistory } from './utils/trajectoryEngine';
 import { CONFIG } from './config';
+import { Card } from './components/ui/card';
+import { Button } from './components/ui/button';
+import {
+  CubeIcon,
+  ClockIcon,
+  ArrowUpIcon,
+  EyeIcon,
+  ChartBarIcon
+} from '@heroicons/react/24/outline';
 
 function App() {
+  // Data states
   const [balloons, setBalloons] = useState([]);
+  const [tracks, setTracks] = useState({});
   const [filteredBalloons, setFilteredBalloons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
+
+  // UI states
   const [activeTab, setActiveTab] = useState('where');
   const [altitudeFilter, setAltitudeFilter] = useState([0, 35000]);
   const [clusters, setClusters] = useState([]);
@@ -22,6 +38,13 @@ function App() {
   const [hoveredFilter, setHoveredFilter] = useState(null);
   const [showGrid, setShowGrid] = useState(false);
   const [hoveredCluster, setHoveredCluster] = useState(null);
+
+  // Mission control states
+  const [selectedTrack, setSelectedTrack] = useState(null);
+  const [selectedHour, setSelectedHour] = useState(0);
+  const [viewMode, setViewMode] = useState('static'); // 'flow' or 'static'
+  const [isPlaying, setIsPlaying] = useState(false);
+
   const [stats, setStats] = useState({
     totalBalloons: 0,
     hoursWithData: 0,
@@ -48,8 +71,11 @@ function App() {
       }
       
       const processed = processBalloonData(allHoursData);
+      const trajectoryTracks = processConstellationHistory(allHoursData);
       console.log('Processed Balloons:', processed);
+      console.log('Trajectory Tracks:', trajectoryTracks);
       setBalloons(processed);
+      setTracks(trajectoryTracks);
       setFilteredBalloons(processed);
       
       // Calculate statistics
@@ -120,77 +146,115 @@ function App() {
     // Could implement region filtering here
   };
 
+  // Time animation effect
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    const interval = setInterval(() => {
+      setSelectedHour(prev => (prev + 1) % 24);
+    }, 1000); // 1 second per hour
+
+    return () => clearInterval(interval);
+  }, [isPlaying]);
+
+  const handleBalloonClick = (track) => {
+    setSelectedTrack(track);
+    setViewMode('flow'); // Switch to flow view when balloon is selected
+  };
+
+  const handlePlayPause = () => {
+    setIsPlaying(!isPlaying);
+  };
+
   return (
-    <div className="w-full min-h-screen m-0 p-0 flex flex-col">
+    <div className="w-full min-h-screen bg-background text-foreground">
       {/* Header */}
-      <header className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-8 py-6 flex-shrink-0">
-        <div className="flex justify-between items-center flex-wrap gap-4">
+      <header className="border-b">
+        <div className="px-6 py-3 space-y-3">
+          {/* Row 1: Title */}
           <div>
-            <h1 className="text-3xl font-bold mb-2">🎈 Weather Balloon Constellation</h1>
-            <p className="text-sm opacity-95">Current positions of 1,000+ weather balloons with real-time atmospheric data</p>
+            <h1 className="text-xl font-bold">🛰️ WindBorne Telemetry Dashboard</h1>
+            <p className="text-xs">Real-time monitoring & analysis</p>
           </div>
-          
-          {lastUpdate && (
-            <div className="text-right">
-              <span className="text-xs opacity-90 block mb-1">Last Updated:</span>
-              <span className="text-lg font-semibold">{lastUpdate.toLocaleTimeString()}</span>
+
+          {/* Row 2: Controls (Single Line) */}
+          <div className="flex items-center gap-4">
+            {/* Time Control */}
+            <TimeScrubber
+              currentHour={selectedHour}
+              onHourChange={setSelectedHour}
+              maxHours={24}
+              isPlaying={isPlaying}
+              onPlayPause={handlePlayPause}
+            />
+
+            {/* View Buttons */}
+            <div className="flex gap-2 shrink-0">
+              <Button
+                variant={viewMode === 'flow' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setViewMode('flow')}
+                title="Flow View - Track balloon movements"
+              >
+                <EyeIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                variant={viewMode === 'static' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setViewMode('static')}
+                title="Analysis View - Explore insights"
+              >
+                <ChartBarIcon className="w-4 h-4" />
+              </Button>
             </div>
-          )}
+
+            {/* Stats (Inline with Icons) */}
+            <div className="flex items-center gap-4 text-sm shrink-0">
+              <span className="flex items-center gap-1">
+                <CubeIcon className="w-4 h-4" />
+                {stats.totalBalloons}
+              </span>
+              <span className="flex items-center gap-1">
+                <ArrowUpIcon className="w-4 h-4" />
+                {(stats.avgAltitude / 1000).toFixed(1)}km
+              </span>
+              <span className="flex items-center gap-1">
+                <ClockIcon className="w-4 h-4" />
+                {stats.hoursWithData}h
+              </span>
+            </div>
+          </div>
         </div>
       </header>
 
-      {/* Stats Dashboard */}
-      {!loading && !error && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 px-8 py-4 bg-gray-50 border-b border-gray-200 flex-shrink-0">
-          <div className="text-center p-3 bg-white rounded-lg shadow-sm">
-            <div className="text-3xl font-bold text-indigo-600 mb-1">{stats.totalBalloons}</div>
-            <div className="text-xs text-gray-600 uppercase tracking-wider">Total Balloons</div>
-          </div>
-          <div className="text-center p-3 bg-white rounded-lg shadow-sm">
-            <div className="text-3xl font-bold text-green-600 mb-1">{(stats.avgAltitude / 1000).toFixed(1)}km</div>
-            <div className="text-xs text-gray-600 uppercase tracking-wider">Avg Altitude</div>
-          </div>
-          <div className="text-center p-3 bg-white rounded-lg shadow-sm">
-            <div className="text-3xl font-bold text-blue-600 mb-1">{stats.northernHem}</div>
-            <div className="text-xs text-gray-600 uppercase tracking-wider">Northern Hem</div>
-          </div>
-          <div className="text-center p-3 bg-white rounded-lg shadow-sm">
-            <div className="text-3xl font-bold text-purple-600 mb-1">{stats.southernHem}</div>
-            <div className="text-xs text-gray-600 uppercase tracking-wider">Southern Hem</div>
-          </div>
-        </div>
-      )}
-
       {/* Loading State */}
       {loading && (
-        <div className="py-20 px-8 text-center">
-          <div className="inline-block w-12 h-12 border-4 border-gray-200 border-t-indigo-600 rounded-full animate-spin mb-5"></div>
-          <p className="text-lg text-gray-700 mb-2">Loading balloon constellation...</p>
-          <p className="text-sm text-gray-500">Fetching current balloon positions</p>
+        <div className="flex flex-col justify-center items-center h-[calc(100vh-120px)]">
+          <div className="w-12 h-12 border-4 border-border border-t-foreground rounded-full animate-spin mb-6"></div>
+          <h3 className="text-xl mb-4">Loading Balloon Constellation...</h3>
+          <p className="text-sm">Processing 24 hours of trajectory data</p>
         </div>
       )}
 
       {/* Error State */}
       {error && (
-        <div className="py-16 px-8 text-center">
-          <h3 className="text-2xl text-red-600 font-semibold mb-4">⚠️ Error</h3>
-          <p className="text-gray-600 mb-6">{error}</p>
-          <button 
-            onClick={loadBalloonData}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-semibold transition-colors"
-          >
-            Retry
-          </button>
+        <div className="flex flex-col justify-center items-center h-[calc(100vh-120px)]">
+          <h3 className="text-xl mb-4">⚠️ Data Loading Error</h3>
+          <p className="text-sm mb-6">{error}</p>
+          <Button variant="outline" onClick={loadBalloonData}>Retry</Button>
         </div>
       )}
 
-      {/* Main Content: Map (70%) + Insights Panel (30%) */}
+      {/* Main Mission Control Interface */}
       {!loading && !error && balloons.length > 0 && (
-        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-          {/* Map Section - 70% */}
-          <div className="w-full md:w-[70%] h-[500px] md:h-auto relative bg-gray-50">
-            <BalloonMap 
+        <div className="flex h-[calc(100vh-120px)] overflow-hidden">
+          {/* Map Section */}
+          <div className="flex-1 relative bg-background">
+            <BalloonMap
+              tracks={tracks}
               balloons={filteredBalloons}
+              viewMode={viewMode}
+              onBalloonClick={handleBalloonClick}
               activeTab={activeTab}
               clusters={clusters}
               denseRegions={denseRegions}
@@ -200,53 +264,58 @@ function App() {
               hoveredCluster={hoveredCluster}
             />
           </div>
-          
-          {/* Insights Panel - 30% */}
-          <div className="w-full md:w-[30%] h-[600px] md:h-auto bg-white border-l border-gray-200 overflow-hidden">
-            <TabPanel 
-              tabs={tabs} 
-              activeTab={activeTab} 
-              onChange={setActiveTab}
-            >
-              {activeTab === 'where' && (
-                <WherePanel 
-                  balloons={filteredBalloons}
-                  clusters={clusters}
-                  onRegionClick={handleWhereRegionClick}
-                  onHoverFilter={setHoveredFilter}
-                  onClusterHover={setHoveredCluster}
-                />
-              )}
-              {activeTab === 'altitude' && (
-                <HowHighPanel 
-                  balloons={balloons}
-                  onAltitudeFilter={handleAltitudeFilter}
-                  onHoverFilter={setHoveredFilter}
-                />
-              )}
-              {activeTab === 'density' && (
-                <HowManyPanel 
-                  balloons={filteredBalloons}
-                  onRegionClick={handleRegionClick}
-                  onHoverFilter={setHoveredFilter}
-                  showGrid={showGrid}
-                  onToggleGrid={() => setShowGrid(!showGrid)}
-                />
-              )}
-            </TabPanel>
+
+          {/* Sidebar Section */}
+          <div className="w-[400px] border-l flex flex-col overflow-hidden">
+            {selectedTrack ? (
+              <Sidebar
+                selectedTrack={selectedTrack}
+                selectedHour={selectedHour}
+              />
+            ) : (
+              <TabPanel
+                tabs={tabs}
+                activeTab={activeTab}
+                onChange={setActiveTab}
+              >
+                {activeTab === 'where' && (
+                  <WherePanel
+                    balloons={filteredBalloons}
+                    clusters={clusters}
+                    onRegionClick={handleWhereRegionClick}
+                    onHoverFilter={setHoveredFilter}
+                    onClusterHover={setHoveredCluster}
+                  />
+                )}
+                {activeTab === 'altitude' && (
+                  <HowHighPanel
+                    balloons={balloons}
+                    onAltitudeFilter={handleAltitudeFilter}
+                    onHoverFilter={setHoveredFilter}
+                  />
+                )}
+                {activeTab === 'density' && (
+                  <HowManyPanel
+                    balloons={filteredBalloons}
+                    onRegionClick={handleRegionClick}
+                    onHoverFilter={setHoveredFilter}
+                    showGrid={showGrid}
+                    onToggleGrid={() => setShowGrid(!showGrid)}
+                  />
+                )}
+              </TabPanel>
+            )}
           </div>
         </div>
       )}
 
       {/* Footer */}
-      <footer className="px-8 py-4 bg-gray-50 border-t border-gray-200 text-center flex-shrink-0">
-        <p className="text-sm text-gray-600 mb-2">
-          Data from <a href="https://windbornesystems.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 font-semibold hover:underline">WindBorne Systems</a> & 
-          <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 font-semibold hover:underline"> OpenMeteo</a>
+      <footer className="border-t px-8 py-4 text-center text-sm">
+        <p className="mb-1">
+          Data from <a href="https://windbornesystems.com" target="_blank" rel="noopener noreferrer" className="underline hover:no-underline">WindBorne Systems</a> &
+          <a href="https://open-meteo.com" target="_blank" rel="noopener noreferrer" className="underline hover:no-underline"> OpenMeteo</a>
         </p>
-        <p className="text-xs text-gray-400">
-          Interactive weather balloon tracking application
-        </p>
+        <p>Telemetry & Verification Dashboard</p>
       </footer>
     </div>
   );

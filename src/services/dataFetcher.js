@@ -1,4 +1,5 @@
 import { CONFIG } from '../config';
+import { getPressureLevel } from './analytics';
 
 /**
  * Fetch balloon data from WindBorne API for a specific hour
@@ -112,46 +113,62 @@ export async function fetchAllBalloonData() {
 }
 
 /**
- * Fetch weather data for a specific location
+ * Fetch weather data for a specific location and altitude
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
+ * @param {number} altitude - Altitude in meters
  * @returns {Promise<object|null>} Weather data or null
  */
-export async function fetchWeatherData(lat, lon) {
+export async function fetchWeatherData(lat, lon, altitude = 16000) {
   try {
+    // Get appropriate pressure level for the balloon's altitude
+    const pressureLevel = getPressureLevel(altitude);
+
+    // Use hourly data with pressure levels instead of surface current data
     const params = new URLSearchParams({
       latitude: lat.toFixed(4),
       longitude: lon.toFixed(4),
-      current: 'temperature_2m,relative_humidity_2m,precipitation,pressure_msl,wind_speed_10m,wind_direction_10m,cloud_cover,weather_code',
+      hourly: `temperature_${pressureLevel},windspeed_${pressureLevel},winddirection_${pressureLevel},relative_humidity_${pressureLevel},cloud_cover,weather_code`,
       wind_speed_unit: 'ms',
-      timezone: 'auto'
+      timezone: 'auto',
+      forecast_hours: 1  // Only need current hour
     });
-    
+
     const url = `${CONFIG.WEATHER_API_BASE}?${params}`;
+    console.log(`🌤️ Fetching weather for ${lat.toFixed(2)}°, ${lon.toFixed(2)}° at ${altitude}m (${pressureLevel})`);
+
     const response = await fetch(url);
-    
+
     if (!response.ok) {
+      console.warn(`Weather API error: ${response.status}`);
       return null;
     }
-    
+
     const data = await response.json();
-    
-    if (!data.current) {
+
+    if (!data.hourly) {
+      console.warn('No hourly data available');
       return null;
     }
-    
+
+    // Get the most recent hour (index 0)
+    const tempKey = `temperature_${pressureLevel}`;
+    const windSpeedKey = `windspeed_${pressureLevel}`;
+    const windDirKey = `winddirection_${pressureLevel}`;
+    const humidityKey = `relative_humidity_${pressureLevel}`;
+
     return {
-      temperature: data.current.temperature_2m,
-      humidity: data.current.relative_humidity_2m,
-      precipitation: data.current.precipitation,
-      pressure: data.current.pressure_msl,
-      windSpeed: data.current.wind_speed_10m,
-      windDirection: data.current.wind_direction_10m,
-      cloudCover: data.current.cloud_cover,
-      weatherCode: data.current.weather_code
+      temperature: data.hourly[tempKey]?.[0],
+      humidity: data.hourly[humidityKey]?.[0],
+      windSpeed: data.hourly[windSpeedKey]?.[0],
+      windDirection: data.hourly[windDirKey]?.[0],
+      cloudCover: data.hourly.cloud_cover?.[0],
+      weatherCode: data.hourly.weather_code?.[0],
+      pressureLevel: pressureLevel,
+      altitude: altitude
     };
   } catch (error) {
-    console.warn(`Failed to fetch weather for ${lat},${lon}:`, error.message);
+    console.warn(`Failed to fetch weather for ${lat},${lon} at ${altitude}m:`, error.message);
     return null;
   }
 }

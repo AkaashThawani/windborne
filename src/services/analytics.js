@@ -304,6 +304,16 @@ export const ALTITUDE_LEGEND = [
   { label: '30km+ (Upper Strat)', color: '#ef4444' }
 ];
 
+// Convert altitude (meters) to appropriate pressure level for weather API
+export const getPressureLevel = (altitudeMeters) => {
+  if (altitudeMeters < 1000) return '1000hPa'; // Surface (~0km)
+  if (altitudeMeters < 5000) return '700hPa';  // Lower atmosphere (~3km)
+  if (altitudeMeters < 9000) return '500hPa';  // Mid atmosphere (~5.5km)
+  if (altitudeMeters < 14000) return '200hPa'; // Upper atmosphere (~12km)
+  if (altitudeMeters < 20000) return '100hPa'; // Stratosphere (~16km) - WindBorne zone
+  return '50hPa';                              // Higher stratosphere (~20km+)
+};
+
 // ===== PHASE 3: HOW MANY (Density & Concentration) =====
 
 export const calculateDensity = (balloons, gridSize = 10) => {

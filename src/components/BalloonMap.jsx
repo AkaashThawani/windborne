@@ -1,10 +1,12 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Rectangle, useMap } from 'react-leaflet';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Rectangle, CircleMarker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { CONFIG } from '../config';
 import { fetchWeatherData, getWeatherDescription } from '../services/dataFetcher';
 import { getAltitudeColor, ALTITUDE_LEGEND, getRegionColor, REGION_LEGEND } from '../services/analytics';
+import { calculateSegmentSpeed, calculateTrackSpeeds, getSpeedColor, getGlowClass } from '../utils/trajectoryEngine';
 
 // Fix for default marker icon issue in React-Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -248,17 +250,24 @@ function darkenColor(color, percent) {
 // Lazy popup content
 const PopupContent = ({ balloon, position, inCluster }) => {
   const [weather, setWeather] = useState(null);
-  const [loading, setLoading] = useState(false);
-  
-  const loadWeather = useCallback(async () => {
-    if (!weather && !loading) {
-      setLoading(true);
-      const weatherData = await fetchWeatherData(position.lat, position.lon);
-      setWeather(weatherData);
-      setLoading(false);
-    }
-  }, [weather, loading, position]);
-  
+  const [loading, setLoading] = useState(true); // Start with loading=true
+
+  // Automatically load weather data when popup opens
+  useEffect(() => {
+    const loadWeatherData = async () => {
+      try {
+        const weatherData = await fetchWeatherData(position.lat, position.lon, position.alt);
+        setWeather(weatherData);
+      } catch (error) {
+        console.error('Failed to load weather data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadWeatherData();
+  }, [position]); // Depend on position to reload if it changes
+
   return (
     <div className="balloon-popup">
       <h3>Balloon {balloon.id.substring(8)}</h3>
@@ -268,22 +277,13 @@ const PopupContent = ({ balloon, position, inCluster }) => {
         <p><strong>Age:</strong> {position.hour === 0 ? 'Current' : `${position.hour}h ago`}</p>
         {inCluster && <p><strong>Status:</strong> <span className="text-indigo-600">In Cluster</span></p>}
       </div>
-      
-      {!weather && !loading && (
-        <button 
-          onClick={loadWeather}
-          className="mt-2 px-3 py-1 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700"
-        >
-          Load Weather Data
-        </button>
-      )}
-      
+
       {loading && (
         <div className="weather-info">
           <p>Loading weather data...</p>
         </div>
       )}
-      
+
       {weather && (
         <div className="weather-info">
           <h4>Weather Conditions</h4>
@@ -380,41 +380,122 @@ const BalloonMarker = React.memo(({
 // Helper functions
 function shouldHighlight(balloon, hoveredFilter, clusters) {
   if (!hoveredFilter) return true;
-  
+
   const { type, value } = hoveredFilter;
   const pos = balloon.currentPosition;
-  
+
   switch(type) {
     case 'hemisphere':
       return (value === 'northern' && pos.lat >= 0) ||
              (value === 'southern' && pos.lat < 0);
-    
+
     case 'region': {
       const balloonRegion = getRegion(pos);
       return balloonRegion === value;
     }
-    
+
     case 'altitude':
       return pos.alt >= value.min && pos.alt < value.max;
-    
+
     case 'cluster':
-      return clusters.some(cluster => 
+      return clusters.some(cluster =>
         cluster.balloons.some(b => b.id === balloon.id) &&
         cluster === value
       );
-    
+
     case 'denseRegion':
       return pos.lat >= value.lat && pos.lat < value.lat + 10 &&
              pos.lon >= value.lon && pos.lon < value.lon + 10;
-    
+
     default:
       return true;
   }
 }
 
+// Flow Trails Component - Speed-colored trajectory lines
+const FlowTrails = React.memo(({ tracks }) => {
+  if (!tracks || Object.keys(tracks).length === 0) return null;
+
+  const trailElements = [];
+
+  Object.entries(tracks).forEach(([balloonId, track]) => {
+    track.forEach((point, i) => {
+      if (i === 0) return;
+
+      const prevPoint = track[i - 1];
+      const speed = calculateSegmentSpeed(prevPoint, point);
+      const color = getSpeedColor(speed);
+      const glowClass = getGlowClass(speed);
+
+      // Opacity based on age (older = more transparent)
+      const opacity = (i / track.length) * 0.8 + 0.2;
+
+      trailElements.push(
+        <Polyline
+          key={`trail-${balloonId}-${i}`}
+          positions={[
+            [prevPoint.lat, prevPoint.lon],
+            [point.lat, point.lon]
+          ]}
+          pathOptions={{
+            color: color,
+            weight: 3,
+            opacity: opacity,
+            lineCap: 'round'
+          }}
+          className={glowClass}
+        />
+      );
+    });
+  });
+
+  return <>{trailElements}</>;
+});
+
+// Flow Markers Component - Current position markers with speed-based styling
+const FlowMarkers = React.memo(({ tracks, onBalloonClick }) => {
+  if (!tracks || Object.keys(tracks).length === 0) return null;
+
+  return Object.values(tracks).map(track => {
+    const currentPos = track[track.length - 1];
+    const speeds = calculateTrackSpeeds(track);
+    const currentSpeed = speeds[speeds.length - 1]?.speed || 0;
+
+    const color = getSpeedColor(currentSpeed);
+    const glowClass = getGlowClass(currentSpeed);
+
+    return (
+      <CircleMarker
+        key={currentPos.id}
+        center={[currentPos.lat, currentPos.lon]}
+        radius={6}
+        pathOptions={{
+          color: '#fff',
+          fillColor: color,
+          fillOpacity: 1,
+          weight: 2
+        }}
+        className={glowClass}
+        eventHandlers={{
+          click: () => onBalloonClick && onBalloonClick(track)
+        }}
+      >
+        <Popup>
+          <div>
+            <strong>Balloon {currentPos.id}</strong>
+            <p>Speed: {currentSpeed.toFixed(1)} km/h</p>
+            <p>Altitude: {(currentPos.alt / 1000).toFixed(1)} km</p>
+            <p>24h Track: {track.length} positions</p>
+          </div>
+        </Popup>
+      </CircleMarker>
+    );
+  });
+});
+
 function getRegion(position) {
   const { lat, lon } = position;
-  
+
   if (lon >= -180 && lon <= -70) {
     if (lat >= 15 && lat <= 75) return 'northAmerica';
     return 'atlantic';
@@ -431,10 +512,13 @@ function getRegion(position) {
   return 'pacific';
 }
 
-export default function BalloonMap({ 
-  balloons, 
-  activeTab = 'altitude', 
-  clusters = [], 
+export default function BalloonMap({
+  tracks = {},
+  balloons,
+  viewMode = 'static',
+  onBalloonClick,
+  activeTab = 'altitude',
+  clusters = [],
   denseRegions = [],
   selectedRegion = null,
   hoveredFilter = null,
@@ -450,18 +534,18 @@ export default function BalloonMap({
     [activeTab]
   );
   
-  const legendTitle = useMemo(() => 
+  const legendTitle = useMemo(() =>
     activeTab === 'where' ? 'Region Colors' : 'Altitude Legend',
     [activeTab]
   );
-  
+
   // Memoize markers with highlight calculation
-  const markers = useMemo(() => 
+  const markers = useMemo(() =>
     balloons.map(balloon => {
       const highlighted = shouldHighlight(balloon, hoveredFilter, clusters);
       return (
-        <BalloonMarker 
-          key={balloon.id} 
+        <BalloonMarker
+          key={balloon.id}
           balloon={balloon}
           activeTab={activeTab}
           clusters={clusters}
@@ -472,7 +556,22 @@ export default function BalloonMap({
     }),
     [balloons, activeTab, clusters, selectedRegion, hoveredFilter]
   );
-  
+
+  // Render flow visualization or static markers based on view mode
+  const renderVisualization = () => {
+    if (viewMode === 'flow') {
+      return (
+        <>
+          <FlowTrails tracks={tracks} />
+          <FlowMarkers tracks={tracks} onBalloonClick={onBalloonClick} />
+        </>
+      );
+    } else {
+      // Static analysis mode
+      return markers;
+    }
+  };
+
   return (
     <MapContainer
       center={CONFIG.MAP_CONFIG.center}
@@ -487,46 +586,78 @@ export default function BalloonMap({
       style={{ height: '100%', width: '100%' }}
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         updateWhenIdle={false}
         updateWhenZooming={true}
         keepBuffer={4}
       />
-      
+
       <GridOverlay showGrid={showGrid} />
-      
-      {activeTab === 'where' && (
-        <ClusterLines 
-          clusters={clusters} 
-          hoveredCluster={hoveredCluster} 
-          hoveredFilter={hoveredFilter} 
+
+      {activeTab === 'where' && viewMode === 'static' && (
+        <ClusterLines
+          clusters={clusters}
+          hoveredCluster={hoveredCluster}
+          hoveredFilter={hoveredFilter}
         />
       )}
-      
-      {activeTab === 'density' && (
+
+      {activeTab === 'density' && viewMode === 'static' && (
         <DenseRegions regions={denseRegions} selectedRegion={selectedRegion} />
       )}
-      
-      {markers}
-      
+
+      {renderVisualization()}
+
       {shouldUseFitBounds && !hoveredCluster && balloons.length > 0 && <FitBounds balloons={balloons} />}
       {selectedRegion && <ZoomToRegion selectedRegion={selectedRegion} />}
       <ZoomToCluster cluster={hoveredCluster} />
-      
+
       {/* Dynamic Legend */}
       <div className="leaflet-top leaflet-right" style={{ marginTop: '10px', marginRight: '10px' }}>
-        <div className="leaflet-control" style={{ backgroundColor: 'white', padding: '10px', borderRadius: '8px', boxShadow: '0 1px 5px rgba(0,0,0,0.2)' }}>
-          <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>{legendTitle}</h4>
-          {legend.map((item, idx) => (
-            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', fontSize: '12px' }}>
-              <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: item.color, border: '2px solid white' }} />
-              <span>{item.label}</span>
+        <div className="bg-card text-card-foreground p-4 rounded-lg shadow-lg">
+          <h4 className="text-sm font-semibold text-foreground mb-3 border-b border-border pb-2">
+            {viewMode === 'flow' ? 'Speed Legend' : legendTitle}
+          </h4>
+          {viewMode === 'flow' ? (
+            // Speed-based legend for flow view
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500 border border-white" />
+                <span className="text-xs">0-30 km/h (Slow)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-purple-500 border border-white" />
+                <span className="text-xs">30-60 km/h (Moderate)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-pink-500 border border-white" />
+                <span className="text-xs">60-90 km/h (Strong)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-yellow-500 border border-white" />
+                <span className="text-xs">90+ km/h (Jet Stream)</span>
+              </div>
             </div>
-          ))}
-          {clusters.length > 0 && (
-            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #e5e7eb', fontSize: '11px', color: '#6b7280' }}>
-              <span>Darker/larger = in cluster ({clusters.length} clusters)</span>
+          ) : (
+            // Original legend for static view
+            <div className="space-y-2">
+              {legend.map((item, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <div
+                    className="w-3 h-3 rounded-full border border-white"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="text-xs">{item.label}</span>
+                </div>
+              ))}
+              {clusters.length > 0 && (
+                <div className="pt-2 mt-2 border-t border-border">
+                  <span className="text-xs text-muted-foreground">
+                    Darker/larger = in cluster ({clusters.length} clusters)
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

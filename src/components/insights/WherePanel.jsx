@@ -1,8 +1,14 @@
 import React, { useMemo, useCallback } from 'react';
-import { Card } from '../common/Card';
-import { StatCard } from '../common/StatCard';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { calculateRegionalDistribution, REGION_COLORS } from '../../services/analytics';
+import {
+  GlobeAmericasIcon,
+  MapPinIcon,
+  CubeIcon,
+  HomeIcon
+} from '@heroicons/react/24/outline';
 
 const WherePanelComponent = ({ balloons, clusters, onRegionClick, onHoverFilter, onClusterHover }) => {
   const distribution = useMemo(() => 
@@ -71,36 +77,47 @@ const WherePanelComponent = ({ balloons, clusters, onRegionClick, onHoverFilter,
   
   return (
     <div className="space-y-4">
-      <Card title="Hemispheres">
-        <div className="grid grid-cols-2 gap-4">
-          <div
-            onMouseEnter={() => handleHemisphereEnter('northern')}
-            onMouseLeave={handleHemisphereLeave}
-            className="cursor-pointer transition-transform hover:scale-105"
-          >
-            <StatCard 
-              label="Northern" 
-              value={distribution.northernHem}
-              percentage={(distribution.northernHem / balloons.length * 100).toFixed(0)}
-            />
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle>Hemispheres</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            <Card 
+              className="p-3 text-center cursor-pointer"
+              onMouseEnter={() => handleHemisphereEnter('northern')}
+              onMouseLeave={handleHemisphereLeave}
+            >
+              <GlobeAmericasIcon className="w-6 h-6 mx-auto mb-2" />
+              <div className="text-lg font-bold">{distribution.northernHem}</div>
+              <div className="text-xs uppercase tracking-wide">Northern</div>
+              <Badge variant="outline" className="mt-2 text-xs">
+                {(distribution.northernHem / balloons.length * 100).toFixed(0)}%
+              </Badge>
+            </Card>
+            <Card 
+              className="p-3 text-center cursor-pointer"
+              onMouseEnter={() => handleHemisphereEnter('southern')}
+              onMouseLeave={handleHemisphereLeave}
+            >
+              <MapPinIcon className="w-6 h-6 mx-auto mb-2" />
+              <div className="text-lg font-bold">{distribution.southernHem}</div>
+              <div className="text-xs uppercase tracking-wide">Southern</div>
+              <Badge variant="outline" className="mt-2 text-xs">
+                {(distribution.southernHem / balloons.length * 100).toFixed(0)}%
+              </Badge>
+            </Card>
           </div>
-          <div
-            onMouseEnter={() => handleHemisphereEnter('southern')}
-            onMouseLeave={handleHemisphereLeave}
-            className="cursor-pointer transition-transform hover:scale-105"
-          >
-            <StatCard 
-              label="Southern" 
-              value={distribution.southernHem}
-              percentage={(distribution.southernHem / balloons.length * 100).toFixed(0)}
-            />
-          </div>
-        </div>
+        </CardContent>
       </Card>
       
-      <Card title="Regional Distribution">
-        <ResponsiveContainer width="100%" height={250}>
-          <PieChart>
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle>Regional Distribution</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
             <Pie
               data={pieData}
               dataKey="value"
@@ -119,72 +136,83 @@ const WherePanelComponent = ({ balloons, clusters, onRegionClick, onHoverFilter,
             </Pie>
             <Tooltip />
             <Legend />
-          </PieChart>
-        </ResponsiveContainer>
+            </PieChart>
+          </ResponsiveContainer>
+        </CardContent>
       </Card>
       
-      <Card title={`${clusters.length} Detected Clusters`}>
-        <p className="text-sm text-gray-600 mb-3">
-          High-density clusters found (15+ balloons within 1000km)
-        </p>
-        <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle>{clusters.length} Detected Clusters</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm mb-3">
+            High-density clusters found (15+ balloons within 1000km)
+          </p>
+          <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
           {sortedClusters.map((cluster, idx) => (
             <div 
               key={idx} 
-              className="p-2 bg-gray-50 rounded cursor-pointer hover:bg-gray-100 transition-colors"
+              className="p-2 border rounded cursor-pointer"
               onMouseEnter={() => handleClusterEnter(cluster)}
               onMouseLeave={handleClusterLeave}
             >
               <div className="flex justify-between items-center mb-1">
                 <span className="font-medium text-sm">Cluster {idx + 1}</span>
-                <span className="text-indigo-600 font-semibold text-sm">{cluster.count} balloons</span>
+                <span className="font-semibold text-sm">{cluster.count} balloons</span>
               </div>
-              <div className="text-xs text-gray-500">
+              <div className="text-xs">
                 Center: {cluster.center.lat.toFixed(1)}°, {cluster.center.lon.toFixed(1)}°
               </div>
             </div>
           ))}
           {sortedClusters.length === 0 && (
-            <p className="text-sm text-gray-400 italic">No large clusters detected</p>
+            <p className="text-sm italic">No large clusters detected</p>
           )}
-        </div>
+          </div>
+        </CardContent>
       </Card>
       
-      <Card title="Coverage Summary">
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div 
-            className="p-2 bg-blue-50 rounded cursor-pointer hover:bg-blue-100 transition-colors"
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle>Coverage Summary</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div 
+            className="p-2 border rounded cursor-pointer"
             onMouseEnter={() => handleRegionEnter('pacific')}
             onMouseLeave={handleHemisphereLeave}
           >
-            <div className="text-xs text-gray-600">Pacific Ocean</div>
+            <div className="text-xs">Pacific Ocean</div>
             <div className="text-lg font-bold text-blue-600">{distribution.pacific}</div>
           </div>
           <div 
-            className="p-2 bg-green-50 rounded cursor-pointer hover:bg-green-100 transition-colors"
+            className="p-2 border rounded cursor-pointer"
             onMouseEnter={() => handleRegionEnter('atlantic')}
             onMouseLeave={handleHemisphereLeave}
           >
-            <div className="text-xs text-gray-600">Atlantic Ocean</div>
+            <div className="text-xs">Atlantic Ocean</div>
             <div className="text-lg font-bold text-green-600">{distribution.atlantic}</div>
           </div>
           <div 
-            className="p-2 bg-yellow-50 rounded cursor-pointer hover:bg-yellow-100 transition-colors"
+            className="p-2 border rounded cursor-pointer"
             onMouseEnter={() => handleRegionEnter('northAmerica')}
             onMouseLeave={handleHemisphereLeave}
           >
-            <div className="text-xs text-gray-600">North America</div>
+            <div className="text-xs">North America</div>
             <div className="text-lg font-bold text-yellow-600">{distribution.northAmerica}</div>
           </div>
           <div 
-            className="p-2 bg-purple-50 rounded cursor-pointer hover:bg-purple-100 transition-colors"
+            className="p-2 border rounded cursor-pointer"
             onMouseEnter={() => handleRegionEnter('europe')}
             onMouseLeave={handleHemisphereLeave}
           >
-            <div className="text-xs text-gray-600">Europe</div>
+            <div className="text-xs">Europe</div>
             <div className="text-lg font-bold text-purple-600">{distribution.europe}</div>
           </div>
-        </div>
+          </div>
+        </CardContent>
       </Card>
     </div>
   );
