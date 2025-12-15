@@ -10,7 +10,7 @@ export const CONFIG = {
   REFRESH_INTERVAL: 60 * 60 * 1000,
 
   // Number of hours to fetch (24 hours ago to NOW)
-  HOURS_TO_FETCH: 24,        // 24h ago to NOW (inclusive)
+  HOURS_TO_FETCH: 23,        // 24h ago to NOW (inclusive)
   START_HOUR: 23,            // Start from 24 hours ago
   END_HOUR: 0,               // End at current time (NOW)
 

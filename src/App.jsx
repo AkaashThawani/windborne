@@ -7,7 +7,17 @@ import { WherePanel } from './components/insights/WherePanel';
 import { HowHighPanel } from './components/insights/HowHighPanel';
 import { HowManyPanel } from './components/insights/HowManyPanel';
 import { fetchAllBalloonData, processBalloonData } from './services/dataFetcher';
-import { calculateRegionalDistribution, calculateAltitudeStats, detectClusters, calculateDensity } from './services/analytics';
+import { 
+  calculateRegionalDistribution, 
+  calculateAltitudeStats, 
+  detectClusters, 
+  calculateDensity,
+  calculateSpeedLeaderboard,
+  detectEddies,
+  calculateConvergence,
+  detectTurbulence,
+  detectShearLayers
+} from './services/analytics';
 import { processConstellationHistory } from './utils/trajectoryEngine';
 import { CONFIG } from './config';
 import { Card } from './components/ui/card';
@@ -42,6 +52,13 @@ function App() {
     totalBalloons: 0,
     hoursWithData: 0,
     avgAltitude: 0
+  });
+
+  // Advanced features state
+  const [advancedFeatures, setAdvancedFeatures] = useState({
+    speedLeaderboard: [],
+    convergence: [],
+    shearLayers: []
   });
 
   // View tabs for flow/analysis modes
@@ -152,13 +169,8 @@ function App() {
       return alt >= altitudeFilter[0] && alt <= altitudeFilter[1];
     });
 
-    // If a track is selected AND we're in flow mode, only show that balloon
-    if (selectedTrack && viewMode === 'flow') {
-      filtered = filtered.filter(b => b.id === selectedTrack[0]?.id);
-    }
-
     return filtered;
-  }, [balloons, tracks, selectedHour, viewMode, altitudeFilter, selectedTrack]);
+  }, [balloons, tracks, selectedHour, viewMode, altitudeFilter]);
 
   // Recalculate clusters and dense regions based on selectedHour in ANALYSIS mode
   const dynamicClusters = useMemo(() => {
@@ -356,6 +368,9 @@ function App() {
               <Sidebar
                 selectedTrack={selectedTrack}
                 selectedHour={selectedHour}
+                tracks={tracks}
+                allBalloons={filteredBalloons}
+                onClearSelection={() => setSelectedTrack(null)}
               />
             ) : viewMode === 'flow' ? (
               <div className="flex flex-col h-full items-center justify-center p-6">

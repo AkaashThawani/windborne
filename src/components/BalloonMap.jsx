@@ -251,12 +251,37 @@ function darkenColor(color, percent) {
     .slice(1);
 }
 
+// Helper function to normalize longitude to -180 to 180 range
+function normalizeLongitude(lon) {
+  while (lon > 180) lon -= 360;
+  while (lon < -180) lon += 360;
+  return lon;
+}
+
 // Interpolation helper functions for smooth animation
 function interpolatePosition(pos1, pos2, fraction) {
   if (!pos1 || !pos2) return pos1 || pos2;
+  
+  // Handle longitude wrapping (e.g., crossing from 179° to -179°)
+  let lon1 = pos1.lon;
+  let lon2 = pos2.lon;
+  
+  // Calculate the shortest path between two longitudes
+  const diff = lon2 - lon1;
+  if (Math.abs(diff) > 180) {
+    // Wrapping is occurring
+    if (diff > 0) {
+      lon1 += 360; // pos1 was on the right, wrap it around
+    } else {
+      lon2 += 360; // pos2 was on the right, wrap it around
+    }
+  }
+  
+  const interpolatedLon = lon1 + (lon2 - lon1) * fraction;
+  
   return {
     lat: pos1.lat + (pos2.lat - pos1.lat) * fraction,
-    lon: pos1.lon + (pos2.lon - pos1.lon) * fraction,
+    lon: normalizeLongitude(interpolatedLon),
     alt: pos1.alt + (pos2.alt - pos1.alt) * fraction,
     id: pos1.id,
     hourIndex: pos1.hourIndex
@@ -307,7 +332,7 @@ function getInterpolatedPosition(track, selectedHour) {
 const PopupContent = ({ balloon, position, inCluster }) => {
   const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(true); // Start with loading=true
-
+ 
   // Automatically load weather data when popup opens
   useEffect(() => {
     const loadWeatherData = async () => {
@@ -470,46 +495,56 @@ function shouldHighlight(balloon, hoveredFilter, clusters) {
 
 // Flow Trails Component - Speed-colored trajectory lines (only for selected balloon)
 const FlowTrails = React.memo(({ selectedTrack }) => {
-  if (!selectedTrack || selectedTrack.length === 0) return null;
+  // Memoize trail elements to prevent recalculation on every render
+  const trailElements = useMemo(() => {
+    if (!selectedTrack || selectedTrack.length === 0) return null;
 
-  const trailElements = [];
+    const elements = [];
+    
+    // Sample every 2-3 hours for better performance (reduce polylines by ~66%)
+    const SAMPLE_RATE = 3; // Only render every 3rd point
 
-  selectedTrack.forEach((point, i) => {
-    if (i === 0) return;
+    for (let i = SAMPLE_RATE; i < selectedTrack.length; i += SAMPLE_RATE) {
+      const point = selectedTrack[i];
+      const prevPoint = selectedTrack[i - SAMPLE_RATE];
+      
+      // Skip drawing line if it crosses the date line (would draw across entire map)
+      const lonDiff = Math.abs(point.lon - prevPoint.lon);
+      if (lonDiff > 180) {
+        // This segment crosses the date line, skip it to avoid line across map
+        continue;
+      }
+      
+      const speed = calculateSegmentSpeed(prevPoint, point);
+      const color = getSpeedColor(speed);
+      const glowClass = getGlowClass(speed);
 
-    const prevPoint = selectedTrack[i - 1];
-    const speed = calculateSegmentSpeed(prevPoint, point);
-    const color = getSpeedColor(speed);
-    const glowClass = getGlowClass(speed);
+      // Opacity based on age (older = more transparent)
+      const opacity = (i / selectedTrack.length) * 0.8 + 0.2;
 
-    // Opacity based on age (older = more transparent)
-    const opacity = (i / selectedTrack.length) * 0.8 + 0.2;
+      elements.push(
+        <Polyline
+          key={`trail-selected-${i}`}
+          positions={[
+            [prevPoint.lat, prevPoint.lon],
+            [point.lat, point.lon]
+          ]}
+          pathOptions={{
+            color: color,
+            weight: 4,
+            opacity: opacity,
+            lineCap: 'round'
+          }}
+          className={glowClass}
+        />
+      );
+    }
 
-    trailElements.push(
-      <Polyline
-        key={`trail-selected-${i}`}
-        positions={[
-          [prevPoint.lat, prevPoint.lon],
-          [point.lat, point.lon]
-        ]}
-        pathOptions={{
-          color: color,
-          weight: 4,
-          opacity: opacity,
-          lineCap: 'round'
-        }}
-        className={glowClass}
-      />
-    );
-  });
+    return elements;
+  }, [selectedTrack]); // Only recalculate when selectedTrack changes
 
   return <>{trailElements}</>;
 });
-
-// Easing function for smooth, natural motion (like Google Maps)
-function easeInOutCubic(t) {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
 
 // Smooth marker animation component using requestAnimationFrame
 const SmoothMarker = ({ track, selectedHourRef, selectedTrack, onBalloonClick }) => {
@@ -634,16 +669,7 @@ const SmoothMarker = ({ track, selectedHourRef, selectedTrack, onBalloonClick })
       eventHandlers={{
         click: () => onBalloonClick && onBalloonClick(track)
       }}
-    >
-      <Popup>
-        <div>
-          <strong>Balloon {initialPos.id.substring(8)}</strong>
-          <p>Speed: {speed.toFixed(1)} km/h</p>
-          <p>Altitude: {(initialPos.alt / 1000).toFixed(1)} km</p>
-          <p>Time: 25h ago</p>
-        </div>
-      </Popup>
-    </CircleMarker>
+    />
   );
 };
 
@@ -764,6 +790,10 @@ export default function BalloonMap({
       zoomSnap={0.5}
       zoomDelta={0.5}
       wheelPxPerZoomLevel={120}
+      scrollWheelZoom={true}
+      doubleClickZoom={true}
+      zoomControl={true}
+      dragging={true}
       style={{ height: '100%', width: '100%' }}
     >
       <TileLayer
@@ -790,9 +820,9 @@ export default function BalloonMap({
 
       {renderVisualization()}
 
-      {shouldUseFitBounds && !hoveredCluster && balloons.length > 0 && <FitBounds balloons={balloons} />}
-      {selectedRegion && <ZoomToRegion selectedRegion={selectedRegion} />}
-      <ZoomToCluster cluster={hoveredCluster} />
+      {shouldUseFitBounds && !hoveredCluster && balloons.length > 0 && viewMode !== 'flow' && <FitBounds balloons={balloons} />}
+      {selectedRegion && viewMode !== 'flow' && <ZoomToRegion selectedRegion={selectedRegion} />}
+      {viewMode !== 'flow' && <ZoomToCluster cluster={hoveredCluster} />}
 
       {/* Dynamic Legend */}
       <div className="leaflet-top leaflet-right" style={{ marginTop: '10px', marginRight: '10px' }}>
